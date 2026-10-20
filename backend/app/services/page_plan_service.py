@@ -35,6 +35,8 @@ def _ordered_nodes(project_id: int) -> list[dict]:
                 "id": n["id"], "title": n["title"], "level": level,
                 "has_children": bool(kids),
                 "override": overrides.get(n["id"]),
+                "intro_words": 300 if kids else None,
+                "manual_override": overrides.get(n["id"]),
                 # 父章**已解析**的倍率（不是它的原始命中值），逐层衰减
                 "ancestor_type_factor": ancestor,
             })
@@ -119,7 +121,7 @@ def build_page_plan_view(project_id: int) -> dict:
             "inherited": (page_plan.own_type_factor(n["title"]) is None
                           and n["ancestor_type_factor"] is not None),
             "target_words": target,
-            "override": n["override"],
+            "override": n.get("manual_override"),
             "words": actual,
             # 偏差按比例给，前端才好按大小排序挑「偏差最大的章」
             "deviation": (round((actual - target) / target, 3) if target else None),

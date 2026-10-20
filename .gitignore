@@ -60,6 +60,9 @@ vite*.log.err
 # 但 README 宣传图与截图需要入库
 !docs/images/
 !docs/images/**
+# 官网公开品牌资源，供前端离线加载；不放开业务上传图片。
+!frontend/public/brand/
+!frontend/public/brand/*.png
 
 # 推广营销内容（仅本地，不公开）
 推广营销/

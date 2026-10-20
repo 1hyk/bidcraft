@@ -22,6 +22,7 @@
       <div v-if="loading" class="pg-empty">加载中…</div>
 
       <div v-else class="pg-body">
+        <p class="pg-hint">预估按已保存的正文字号、行距和页边距计算；修改排版后请先保存。仅更换字体名称、标题或页眉时，估算值可能不变，实际页数以测量为准。</p>
         <div class="pg-top">
           <div class="pg-field">
             <label>目标正文页数</label>
@@ -149,6 +150,7 @@ import { ElMessage } from 'element-plus'
 import { getPagePlan, savePagePlan, measurePagePlan, adjustPagePlan, taskStatus } from '../api'
 
 const props = defineProps({
+  styleRevision: { type: Number, default: 0 },
   modelValue: { type: Boolean, default: false },
   projectId: { type: String, default: '' },
 })
@@ -173,7 +175,7 @@ const tolerance = ref(0.15)
 const form = reactive({ target_pages: null })
 const estimatedPages = computed(() => coeff.value.value
   ? (stats.value.words / coeff.value.value).toFixed(1) : '—')
-watch(() => form.target_pages, (pages) => {
+watch([() => form.target_pages, () => coeff.value.value], ([pages]) => {
   total.value = pages && coeff.value.value ? Math.trunc(pages * coeff.value.value) : null
 })
 
@@ -193,9 +195,10 @@ function devClass(row) {
 }
 function rowClass({ row }) { return row.override ? 'pg-row-custom' : '' }
 
-async function load() {
+async function load(preserve = false) {
   if (!props.projectId) return
   loading.value = true
+  const draft = preserve ? { pages: form.target_pages, rows: new Map(rows.value.map(r => [r.id, r.override])) } : null
   try {
     const { data } = await getPagePlan(props.projectId)
     form.target_pages = data.plan?.target_pages ?? null
@@ -205,6 +208,11 @@ async function load() {
     stats.value = data.stats || stats.value
     measurement.value = data.measurement || null
     rows.value = data.nodes || []
+    if(draft){
+      form.target_pages=draft.pages
+      rows.value.forEach(r=>{if(draft.rows.has(r.id))r.override=draft.rows.get(r.id)})
+      total.value=form.target_pages && coeff.value.value ? Math.trunc(form.target_pages*coeff.value.value) : null
+    }
     if (data.options?.target_pages_range) range.value = data.options.target_pages_range
   } catch (e) {
     ElMessage.error('篇幅设置读取失败：' + (e?.response?.data?.detail || e.message))
@@ -214,6 +222,7 @@ async function load() {
 }
 
 watch(() => props.modelValue, (v) => { if (v) load() })
+watch(() => props.styleRevision, () => { if(props.modelValue) load(true) })
 onMounted(() => { if (props.modelValue) load() })
 
 function resetDefault() {

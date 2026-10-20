@@ -57,13 +57,15 @@ class CompileState(TypedDict):
 def _flatten_toc(toc: dict) -> list[dict]:
     """把章→节树展平为章节列表，每项 {title, level, parent?}。"""
     flat = []
-    def walk(nodes, level=1, parent=None):
+    def walk(nodes, level=1, parent=None, path=()):
         for ch in nodes:
             item = {"title": ch["title"], "level": level}
+            item["path"] = list(path)
+            item["has_children"] = bool(ch.get("children"))
             if parent is not None:
                 item["parent"] = parent
             flat.append(item)
-            walk(ch.get("children") or [], level + 1, ch["title"])
+            walk(ch.get("children") or [], level + 1, ch["title"], (*path, ch["title"]))
 
     walk(toc.get("chapters") or [])
     return flat
@@ -102,6 +104,10 @@ def node_generate_toc(state: CompileState) -> dict:
     project_id = state["project_id"]
     _dom = domain_of_project(project_id)
     _tender_toc = state.get("tender_toc") or None
+    from app.services.compilation_requirements import load_requirements, scope_chapters, requirements_text
+    contract = load_requirements(project_id)
+    required_chapters = scope_chapters(_tender_toc, contract, settings.generation_root_title)
+    tender_text = requirements_text(contract) or state["tender_requirements"]
     titles = generate_toc_titles(
         state["project_info"], state["professions"],
         state["tender_requirements"], _tender_toc,
@@ -125,15 +131,22 @@ def node_generate_toc(state: CompileState) -> dict:
     _pages = load_page_summaries(_dom, project_id)
 
     def _children(ch):
+        from copy import deepcopy
+        from app.core.chapter_title import normalize
+        if (required_chapters and normalize(ch["title"]) == normalize(settings.generation_root_title)):
+            ch["children"] = deepcopy(required_chapters)
+            return ch
         ch["children"] = generate_toc_children(
             ch["title"], state["project_info"], state["professions"],
-            state["tender_requirements"],
+            tender_text,
             # 招标规定目录要传到子节层：规定了就用它的子节原样照抄，没规定才让模型编。
             # 见 generate_toc_children 的注释——这条线此前只传到章那一层。
             tender_toc=state.get("tender_toc") or None,
             # 知识库骨架同传：招标有子节、知识库也有骨架时，两者都摆给模型择优合并。
             skeleton=chapter_skeleton(ch["title"], _pages), domain=_dom,
         )
+        if not ch["children"] and normalize(ch['title']) == normalize(settings.generation_root_title):
+            raise ValueError(f"{ch['title']}的子章节为空")
         return ch
 
     with ThreadPoolExecutor(max_workers=OUTLINE_CONCURRENCY) as pool:
@@ -153,15 +166,42 @@ def node_generate_toc(state: CompileState) -> dict:
     if errors:
         raise ValueError("子节生成失败，原目录未替换：" + "；".join(errors))
 
+    # 指定编制范围时，第一层是整册容器；刚展开的才是主章，仍需展开其子节。
+    # 只补这一层，避免递归让模型不断细分。全书模式保留原来的章→节结构。
+    from app.core.chapter_title import normalize
+
+    scope_title = settings.generation_root_title
+    major_chapters = [ch for root in toc["chapters"]
+                      if len(toc["chapters"]) == 1 and scope_title
+                      and normalize(root["title"]) == normalize(scope_title)
+                      for ch in root.get("children") or []]
+    if major_chapters:
+        compile_service.update_progress(project_id, total=len(titles) + len(major_chapters))
+        done += sum(bool(ch.get("children")) for ch in major_chapters)
+        with ThreadPoolExecutor(max_workers=OUTLINE_CONCURRENCY) as pool:
+            futures = {pool.submit(_children, ch): ch for ch in major_chapters
+                       if not ch.get("children")}
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    errors.append(f"{futures[fut]['title']}: {e}")
+                done += 1
+                compile_service.update_progress(project_id, progress=done)
+                compile_service.save_partial_toc(project_id, toc)
+        if errors:
+            raise ValueError("子节生成失败，原目录未替换：" + "；".join(errors))
+        compile_service.update_progress(project_id, progress=done)
+
+    from app.services.compilation_requirements import validate_stage_coverage
+    validate_stage_coverage(toc, contract)
     # 落库：**先清空旧目录树（连同已写正文与思路）再写入新目录**。
     # 2026-09-10 用户拍板：「重新生成目录」＝真正的重来，前端已二次确认并明确告知
     # "已编写内容将全部清空"。此前 save_tree 在已有目录时直接跳过（写入 0 个节点），
     # 导致新目录不生效、思路却按新目录跑一遍，出现"目录来回切换"的怪象。
     try:
-        from app.services.section_service import clear_tree, save_tree
-
-        clear_tree(project_id)
-        n = save_tree(project_id, toc.get("chapters", []))
+        from app.services.section_service import replace_tree
+        n = replace_tree(project_id, toc.get("chapters", []))
         print(f"[目录落库] 写入 {n} 个节点")
     except Exception as e:  # noqa: BLE001 落库失败必须上报，不能显示成功
         print(f"[目录落库失败] {e}")
@@ -198,9 +238,11 @@ def node_generate_outlines(state: CompileState) -> dict:
     summaries = load_page_summaries(dom, state.get("project_id"))
     # 本标段工程构成：思路只能围绕本标段实际包含的工程展开（与目录裁剪同规则）
     lot_text = lot_brief(state["project_id"]) if state.get("project_id") else ""
+    from app.services.compilation_requirements import load_requirements, requirements_text
+    contract = load_requirements(state["project_id"])
 
     def _one(item: dict) -> dict:
-        path = [item["parent"]] if item.get("parent") else []
+        path = item.get("path") or []
         pages = match_pages(item["title"], path, summaries, domain=dom,
                             project_id=state.get("project_id"))
         outline = generate_outline(
@@ -209,10 +251,14 @@ def node_generate_outlines(state: CompileState) -> dict:
             project_facts=state["facts"],
             knowledge_pages=pages,
             experiences=match_experiences(item["title"], path, dom),
+            reqs_text=requirements_text(contract, [item["title"], *path]),
             lot_brief=lot_text, domain=dom, project_id=state.get("project_id"),
         )
         outline["_toc_title"] = item["title"]
         outline["_parent"] = item.get("parent", "")
+        outline["_path"] = path
+        if item["has_children"]:
+            outline["_writing_role"] = "introduction"
         outline["_level"] = item["level"]
         outline["_page_ids"] = [p["id"] for p in pages]
         return outline

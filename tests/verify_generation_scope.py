@@ -17,6 +17,15 @@ from app.services import compile_service
 
 class ScopeTests(unittest.TestCase):
     def setUp(self):
+        def replace(pid, chapters):
+            section_service.clear_tree(pid)
+            return section_service.save_tree(pid, chapters)
+        replacement = patch.object(section_service, 'replace_tree', side_effect=replace)
+        replacement.start()
+        self.addCleanup(replacement.stop)
+        contract = patch('app.services.compilation_requirements.load_requirements', return_value=[])
+        contract.start()
+        self.addCleanup(contract.stop)
         self.scope = patch.object(settings, "generation_root_title", "技术方案")
         self.scope.start()
         self.addCleanup(self.scope.stop)
@@ -93,6 +102,67 @@ class ScopeTests(unittest.TestCase):
                  {"id": 7, "title": "项目实施方案"}]
         self.assertEqual(node_ids(select_roots(roots, "技术方案",
                                               ["工程化交付方案", "项目实施方案"])), {5, 7})
+
+    def test_scoped_toc_expands_major_chapters_and_preserves_on_failure(self):
+        state = {"project_id": 1, "project_info": "项目", "professions": [],
+                 "tender_requirements": ""}
+        def children(title, *args, **kwargs):
+            return [{"title": "实施方案"}] if title == "技术方案" else [{"title": "实施步骤"}]
+        with patch("app.core.domains.domain_of_project", return_value="lowalt"), \
+             patch.object(agent, "generate_toc_titles", return_value=[{"title": "技术方案"}]), \
+             patch.object(agent, "generate_toc_children", side_effect=children) as expand, \
+             patch("app.services.matching.load_page_summaries", return_value=[]), \
+             patch("app.services.matching.chapter_skeleton", return_value=[]), \
+             patch.object(compile_service, "update_progress"), \
+             patch.object(compile_service, "save_partial_toc"), \
+             patch.object(section_service, "clear_tree") as clear, \
+             patch.object(section_service, "save_tree", return_value=3):
+            result = compile_graph.node_generate_toc(state)
+            self.assertEqual(result["toc"]["chapters"][0]["children"][0]["children"],
+                             [{"title": "实施步骤"}])
+            self.assertEqual(expand.call_count, 2)  # 有界展开，不继续生成第四层
+            clear.assert_called_once()
+            clear.reset_mock()
+            def failed_expansion(title, *a, **kw):
+                if title == '技术方案':
+                    return [{'title':'实施方案'}]
+                raise RuntimeError('模型失败')
+            expand.side_effect = failed_expansion
+            with self.assertRaisesRegex(ValueError, "原目录未替换"):
+                compile_graph.node_generate_toc(state)
+            clear.assert_not_called()
+
+    def test_nested_tender_children_keep_descendants(self):
+        toc = {"chapters": [{"title": "技术方案", "children": [
+            {"title": "实施方案", "children": [{"title": "实施步骤"}]}]}]}
+        children = agent._tender_children(toc, "实施方案")
+        self.assertEqual(children, [{"title": "实施步骤"}])
+        major = agent._tender_children(toc, "技术方案")
+        self.assertEqual(major[0]["children"], children)
+        major[0]["children"].clear()
+        self.assertTrue(toc["chapters"][0]["children"][0]["children"])
+
+    def test_tender_order_overrides_model_order_and_numbering(self):
+        specified = [{"title": s} for s in ["工程化交付方案", "测试验收准备方案", "项目实施方案"]]
+        model = [{"title": s} for s in ["第一节 技术指标响应情况", "第二节 项目实施方案",
+                 "第三节 测试验收准备方案", "第四节 工程化交付方案"]]
+        result = agent._ordered_children(model, specified, "技术方案")
+        self.assertEqual([c["title"] for c in result], ["技术指标响应情况"] +
+                         [c["title"] for c in specified])
+        self.assertEqual(model[1]["title"], "第二节 项目实施方案")
+
+    def test_flat_tender_scope_order_is_applied_in_model_path(self):
+        toc = {"chapters": [{"title": "交付安排"}, {"title": "实施安排"}]}
+        with patch.object(agent.llm, "chat", return_value=
+                          '{"children":[{"title":"第一节 实施安排"},{"title":"第二节 交付安排"}]}'):
+            children = agent.generate_toc_children("技术方案", "项目", tender_toc=toc)
+        self.assertEqual([c["title"] for c in children], ["交付安排", "实施安排"])
+
+    def test_parent_repeat_and_duplicate_siblings_are_removed(self):
+        children = [{"title": s} for s in ["第一节 技术指标响应情况", "第二节 响应总表",
+                                          "第三节 响应总表"]]
+        self.assertEqual(agent._ordered_children(children, [], "技术指标响应情况"),
+                         [{"title": "响应总表"}])
 
     def test_failed_children_do_not_replace_existing_tree(self):
         state = {"project_id": 1, "project_info": "项目", "professions": [],

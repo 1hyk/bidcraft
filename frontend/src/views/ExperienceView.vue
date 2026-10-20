@@ -4,7 +4,7 @@
     <header class="page-head">
       <div class="head-left">
         <h1 class="page-title">经验库</h1>
-        <span class="page-sub">对话/编写过程中 AI 自动沉淀的「编制经验」与「编写经验」</span>
+        <span class="page-sub">正文修改与反馈中提炼的编写偏好和纠偏规则</span>
       </div>
       <div class="head-tools">
         <el-select v-model="domainFilter" placeholder="全部领域" clearable class="domain-sel">
@@ -21,7 +21,7 @@
     <!-- 说明条 -->
     <div class="exp-tip">
       <span class="exp-tip-dot" />
-      对话/编写中沉淀的经验自动入库（无需确认），生成时按「章节标题」匹配注入（未限定章节的为全局经验、始终注入），优先级高于知识页
+      新提炼经验先进入待审核，确认后才用于生成。按章节相关性选取，未限定章节的经验适用于同领域各章；不得覆盖本次招标要求。
       <br />
       经验按<strong>所属领域</strong>隔离：只会注入同领域项目的章节，跨领域互不干扰（与知识库同一套口径）
     </div>
@@ -31,13 +31,14 @@
       <div v-if="!filteredItems.length" class="exp-empty">
         <div class="ee-icon">✦</div>
         <p>暂无经验</p>
-        <p class="ee-sub">在工作台对话中修改 AI 生成内容或下达纠偏指令后，AI 会自动提炼经验</p>
+        <p class="ee-sub">在工作台修改正文或提交否决反馈后，系统可提炼经验候选，核对后再确认。</p>
       </div>
 
-      <div v-for="item in filteredItems" :key="item.exp_id" class="exp-card">
+      <div v-for="item in filteredItems" :key="item.id" class="exp-card">
         <div class="exp-main">
           <div class="exp-row1">
             <span class="exp-type" :class="typeCls(item.exp_type)">{{ TYPE_MAP[item.exp_type] || item.exp_type }}</span>
+            <el-tag size="small" :type="item.status === 'confirmed' ? 'success' : 'warning'">{{ item.status === 'confirmed' ? '已生效' : '待审核' }}</el-tag>
             <span class="exp-domain">{{ domainLabel(item.domain) }}</span>
             <span v-if="item.chapter_type" class="exp-chapter">{{ item.chapter_type }}</span>
           </div>
@@ -45,6 +46,7 @@
           <div class="exp-src">来源：{{ srcText(item) }}</div>
         </div>
         <div class="exp-actions">
+          <button v-if="item.status === 'pending'" class="ea-btn" @click="confirmItem(item)">确认生效</button>
           <button class="ea-btn" @click="openEdit(item)">编辑</button>
           <button class="ea-btn danger" @click="askDelete(item)">删除</button>
         </div>
@@ -70,7 +72,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showEdit = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="saveEdit">保存并确认生效</el-button>
       </template>
     </el-dialog>
   </div>
@@ -79,7 +81,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listExperience, updateExperience, deleteExperience, listDomains } from '../api'
+import { listExperience, confirmExperience, updateExperience, deleteExperience, listDomains } from '../api'
 import { genreOf } from '../genre'
 
 const keyword = ref('')
@@ -150,6 +152,17 @@ async function load() {
     defaultDomain.value = doms.data?.default || domains.value[0]?.key || ''
   } finally {
     loading.value = false
+  }
+}
+
+async function confirmItem(item) {
+  try {
+    await ElMessageBox.confirm('确认这条经验可用于同领域后续项目？请核对是否包含仅适用于原项目的安排。', '确认经验')
+    await confirmExperience(item.id)
+    await load()
+    ElMessage.success('经验已确认生效')
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('确认失败，请刷新后重试')
   }
 }
 

@@ -128,14 +128,15 @@ TOC_TITLES_SYSTEM = """你是资深{G_INTRO}编制专家，负责拟定目录的
 TOC_CHILDREN_SYSTEM = """你是资深{G_FULL}编制专家。为目录中指定的某一章生成子节列表。
 
 要求：
-1. 子节按该章的编制惯例排序，标题规范；
+1. 招标已列出的大项必须保持原顺序，只有未规定的部分才按编制惯例安排；
+   子节不得与父章同名，同层标题不得重复，不自行添加章节序号；
 2. **数量由内容决定，不要凑数**——内容单薄的章（函件、声明、单一表格）可以只有 1 节，
    甚至不分子节；内容厚的章（施工方案、技术方案）才需要展开。原先是「按惯例列 2~8 个」，
    那是明着让模型凑，任何章名都能编出两节来；
 3. 给了「同类标书中本章的子节」就**优先照它装配**——那是历史标书里实际用过的章节结构，
    括号里的页数是它在知识库里被写到的次数，**页数越多越是行业惯例**（评审专家按惯例找内容）；
 4. 给了「招标文件格式中列出的大项」就**必须逐一保留**（那是招标的格式红线），可以归并、
-   可以在其下再分子节，但不能漏；两者冲突时以招标要求为准；
+   可以在其下再分子节，但不能漏、不能改变规定大项的相对顺序；两者冲突时以招标要求为准；
 5. 结合项目实际专业，只列本项目真正需要的内容；
 6. 只输出 JSON，不要解释。
 
@@ -209,14 +210,50 @@ def _tender_children(tender_toc: dict | None, chapter_title: str) -> list[dict]:
     target = ct.normalize(chapter_title)
     if not target:
         return []
-    chapters = (tender_toc or {}).get("chapters") or []
+    def flatten(nodes):
+        for node in nodes:
+            yield node
+            yield from flatten(node.get("children") or [])
+
+    chapters = list(flatten((tender_toc or {}).get("chapters") or []))
     hit = next((c for c in chapters if ct.normalize(c.get("title")) == target), None)
     if hit is None:
         hit = next((c for c in chapters if ct.related(c.get("title"), chapter_title)), None)
     if hit is None:
         return []
-    return [{"title": str(k.get("title") or "").strip()}
+    from copy import deepcopy
+    return [dict(deepcopy(k), title=str(k.get("title") or "").strip())
             for k in hit.get("children") or [] if str(k.get("title") or "").strip()]
+
+
+def _ordered_children(children: list[dict], specified: list[dict], parent_title: str) -> list[dict]:
+    """模型只补内容，招标已列大项的相对顺序由程序守住。"""
+    from app.core.chapter_title import normalize
+    from copy import deepcopy
+
+    clean = []
+    seen = {normalize(parent_title)}
+    for child in children:
+        name = normalize(child.get("title"))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        # 模型自行编的章节序号重排后会失效；目录层级与编号由展示/导出处理。
+        clean.append(dict(child, title=name))
+    wanted = [c for c in specified if normalize(c.get("title")) != normalize(parent_title)]
+    by_name = {normalize(c["title"]): c for c in clean}
+    ordered = []
+    for item in wanted:
+        name = normalize(item["title"])
+        node = by_name.get(name, deepcopy(item))
+        node["title"] = item["title"]
+        ordered.append(node)
+    names = {normalize(c["title"]) for c in ordered}
+    # 额外内容保持其原位置；仅替换规定大项的槽位，不按模型的序号排序。
+    it = iter(ordered)
+    result = [next(it) if normalize(c["title"]) in names else c for c in clean]
+    result.extend(it)
+    return result
 
 
 def generate_toc_children(chapter_title: str, project_info: str,
@@ -276,9 +313,23 @@ def generate_toc_children(chapter_title: str, project_info: str,
         temperature=0.3,
         max_tokens=1500,
     )
-    return [{"title": str(c["title"]).strip()}
-            for c in _extract_json(raw).get("children") or []
+    parsed = _extract_json(raw)
+    if not isinstance(parsed.get('children'), list):
+        raise ValueError('子目录响应缺少有效的 children 列表')
+    children = [{"title": str(c["title"]).strip()}
+            for c in parsed['children']
             if isinstance(c, dict) and str(c.get("title") or "").strip()]
+    # 有些招标只抽出本册内部大项，没有再包一层“技术方案”。仅当所有大项
+    # 都能在模型结果精确找到时，认作本层顺序依据，避免把整本商务目录带进来。
+    if not specified:
+        from app.core.config import settings
+        from app.core.chapter_title import normalize
+        top = (tender_toc or {}).get("chapters") or []
+        names = {normalize(c["title"]) for c in children}
+        if (normalize(chapter_title) == normalize(settings.generation_root_title)
+                and top and all(normalize(c.get("title")) in names for c in top)):
+            specified = top
+    return _ordered_children(children, specified, chapter_title)
 
 
 def generate_outline(
@@ -295,7 +346,8 @@ def generate_outline(
     """为指定章节生成编写思路。knowledge_pages 为匹配到的历史知识页；experiences 为已确认用户经验（优先级更高）；
     reqs_text：按章相关的招标要求（评分办法/技术要求/编制要求/废标风险），作为编写依据。
     lot_brief：本标段工程构成摘要——思路只能围绕本标段实际包含的工程展开（同目录裁剪规则）。"""
-    facts = json.dumps(project_facts or [], ensure_ascii=False)
+    from app.services.evidence_roles import technical_facts, ROLE_RULE
+    facts = json.dumps(technical_facts(project_facts or []), ensure_ascii=False)
     # 2026-09-08 决策(A)：思路生成不参考历史页 method/key_points 内容，只列出相关页标题
     pages = json.dumps(
         [{"title": p.get("title")} for p in (knowledge_pages or [])],
@@ -303,7 +355,7 @@ def generate_outline(
     )
     exp_text = "\n".join(f"- [{e.get('exp_type', '经验')}] {e.get('content', '')}" for e in (experiences or []))
     user = (
-        f"章节标题：{chapter_title}\n"
+        ROLE_RULE + "\n" + f"章节标题：{chapter_title}\n"
         f"章节类型：{chapter_type}\n"
         + (f"【本标段工程构成（思路只能围绕这些工程写；未列出的工程类型不得出现）】\n{lot_brief}\n"
            if lot_brief else "")

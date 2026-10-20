@@ -1,76 +1,49 @@
 <template>
   <div class="workspace">
-    <!-- 深色顶栏 -->
     <header class="ws-topbar">
-      <button class="back-btn" @click="$router.push('/')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-        首页
-      </button>
-      <div class="ws-title">
-        <span class="ws-name">项目工作台</span>
-        <span class="ws-id num">№ {{ String(projectId).padStart(3, '0') }}</span>
-        <!-- 当前标段常驻标识：工作台所有操作均基于此标段；点击查看/编辑标段档案 -->
-        <span
-          class="lot-badge clickable"
-          :title="selectedLot ? '点击查看本标段档案（本标段包含什么）' : (lotList.length ? '尚未选定标段，点击选择' : '招标文件未划分标段，工作台基于全线')"
-          @click="openLotProfile"
-        >
-          {{ selectedLot ? '标段 ' + selectedLot.lot_code : (lotList.length ? '未选择标段' : '全线（无标段划分）') }}
-        </span>
-      </div>
-
-      <!-- 阶段步骤条 -->
-      <div class="stage-track">
-        <div
-          v-for="s in STAGES" :key="s.key"
-          class="stage-node"
-          :class="{ done: stageOrder(s.key) < stageOrder(stage), on: s.key === stage }"
-        >
-          <span class="stage-dot num">{{ stageOrder(s.key) < stageOrder(stage) ? '✓' : s.idx }}</span>
-          <span class="stage-label">{{ s.label }}</span>
-        </div>
-      </div>
-
+      <button class="back-btn" @click="$router.push('/')">‹ 返回项目</button>
+      <div class="ws-title"><span class="ws-name">技术方案工作台</span><span class="ws-id num">项目 {{ String(projectId).padStart(3, '0') }}</span></div>
+      <button class="lot-badge clickable" @click="openLotProfile">{{ selectedLot ? '标段 ' + selectedLot.lot_code : (lotList.length ? '选择标段' : '整个项目') }}</button>
       <div class="spacer" />
-      <button class="ghost-btn" @click="showUnderstanding = true">项目理解</button>
-      <button class="ghost-btn" :disabled="stage === 'writing' || activeIsGenerating" @click="openCompanyFill">资料补全</button>
-      <button class="ghost-btn" @click="$router.push('/company')">公司资料</button>
-      <button class="ghost-btn" @click="showFacts = true">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
-        全局参数
-      </button>
-      <!-- 排版设置：导出的 Word 用什么字体字号、页边距、页眉页脚（存 project.docx_style） -->
-      <button class="ghost-btn" @click="showStyle = true">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 17h16M9 4v6M15 14v6"/></svg>
-        排版
-      </button>
-      <!-- 篇幅控制：目标正文页数 → 按排版折算成总字数 → 按权重分摊到章（存 project.page_plan） -->
-      <button class="ghost-btn" @click="showPages = true">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5M9 12h6M9 16h6"/></svg>
-        页数
-      </button>
-      <el-button
-        size="small"
-        :disabled="!canStart" :loading="stage === 'generating_toc'"
-        @click="startCompile"
-      >{{ stage === 'idle' ? '生成目录' : '重新生成目录' }}</el-button>
-      <el-button
-        type="primary" size="small"
-        :disabled="!canWriteAll" :loading="stage === 'writing'"
-        @click="writeAllChapters"
-      >全文编制</el-button>
-      <!-- 导出 Word 交付件：封面 + 目录域 + 正文，见 backend/app/services/docx_export.py -->
-      <button class="ghost-btn" @click="showProposalCheck = true">成稿检查</button>
-      <el-button
-        size="small" plain
-        :disabled="!canExport" :loading="exporting"
-        @click="exportDocx"
-      >{{ exporting ? '导出中…' : '导出 Word' }}</el-button>
+      <el-dropdown trigger="click" @command="openWorkspaceResource">
+        <button class="resource-button">项目资料与设置 ▾</button>
+        <template #dropdown><el-dropdown-menu>
+          <el-dropdown-item command="files">项目文件</el-dropdown-item>
+          <el-dropdown-item command="facts">项目关键参数</el-dropdown-item>
+          <el-dropdown-item command="company">公司资料库</el-dropdown-item>
+          <el-dropdown-item command="style" divided>排版设置</el-dropdown-item>
+          <el-dropdown-item command="pages">目标页数与测量</el-dropdown-item>
+        </el-dropdown-menu></template>
+      </el-dropdown>
+      <el-button :disabled="!canExport" :loading="exporting" @click="exportDocx">{{ exporting ? '导出中…' : '导出 Word' }}</el-button>
     </header>
+    <nav class="workflow-nav" aria-label="技术方案工作流程">
+      <button class="workflow-step" :class="{active: currentWorkflowStep === 1}" @click="showUnderstanding = true"><span class="step-number">01</span><span>项目理解<small>招标要求与范围</small></span></button>
+      <span class="workflow-chevron">›</span>
+      <button class="workflow-step" :class="{active: currentWorkflowStep === 2}" @click="showWorkspaceSettings = !showWorkspaceSettings"><span class="step-number">02</span><span>目录与设置<small>结构、排版与篇幅</small></span></button>
+      <span class="workflow-chevron">›</span>
+      <div class="workflow-step" :class="{active: currentWorkflowStep === 3}"><span class="step-number">03</span><span>正文编写<small>逐章生成与编辑</small></span></div>
+      <span class="workflow-chevron">›</span>
+      <button class="workflow-step" :class="{active: currentWorkflowStep === 4}" @click="openProposalCheck"><span class="step-number">04</span><span>检查与补全<small>核对响应与资料</small></span></button>
+    </nav>
+    <div v-if="showWorkspaceSettings" class="workspace-settings"><strong>目录与生成设置</strong><span>先设置排版与目标页数，再核对目录结构。</span><el-button size="small" @click="showStyle = true">设置排版</el-button><el-button size="small" @click="showPages = true">目标页数</el-button><el-button size="small" @click="openTocBatch">编辑目录</el-button><button class="file-switch" @click="showWorkspaceSettings = false">收起</button></div>
+    <div class="workspace-context">
+      <button class="file-switch" :aria-expanded="!filesCollapsed" @click="filesCollapsed = !filesCollapsed">{{ filesCollapsed ? '☰ 项目文件' : '收起文件' }} <span>{{ files.length }}</span></button>
+      <div class="context-copy"><strong>{{ stageText }}</strong><span>{{ workspaceGuidance }}</span></div>
+      <div class="context-actions">
+        <template v-if="stage === 'writing'"><span class="context-progress">{{ progress }} / {{ total }} 章</span><el-button size="small" type="danger" plain @click="stopBatch">停止生成</el-button></template>
+        <template v-else>
+          <el-button size="small" @click="showStyle = true">排版</el-button><el-button size="small" @click="showPages = true">页数</el-button>
+          <el-button size="small" :disabled="!canStart" :loading="stage === 'generating_toc'" @click="startCompile">{{ tocChapters.length ? '重新生成目录' : '生成目录' }}</el-button>
+          <el-button v-if="stage !== 'done'" size="small" type="primary" :disabled="!canWriteAll" @click="writeAllChapters">生成全文</el-button>
+          <el-button v-else size="small" type="primary" @click="openProposalCheck">检查与补全</el-button>
+        </template>
+      </div>
+    </div>
 
     <div class="ws-body">
-      <!-- 深色侧边栏：文件 + 对话 -->
-      <aside class="sidebar">
+      <!-- 项目文件与生成进度；对话助手暂时隐藏 -->
+      <aside v-show="!filesCollapsed" class="sidebar">
         <section class="side-block files-block">
           <div class="side-head">
             <span class="side-title">项目文件</span>
@@ -123,12 +96,6 @@
           </div>
         </section>
 
-        <section class="side-block chat-block">
-          <div class="side-head">
-            <span class="side-title">AI 助手</span>
-            <button v-if="messages.length" class="chat-clear-btn" title="清空历史消息与上下文" @click="clearChat">清空</button>
-          </div>
-
           <div v-if="progressCard" class="progress-card" :class="stage">
             <div class="pc-head">
               <span class="pc-stage">{{ stageText }}</span>
@@ -152,6 +119,13 @@
             <div v-else-if="stage === 'done'" class="pc-body">
               <p class="pc-ok">正文全部生成完毕，可在右侧逐章查看编辑。</p>
             </div>
+          </div>
+
+
+        <section v-if="CHAT_ASSISTANT_ENABLED" class="side-block chat-block">
+          <div class="side-head">
+            <span class="side-title">AI 助手</span>
+            <button v-if="messages.length" class="chat-clear-btn" title="清空历史消息与上下文" @click="clearChat">清空</button>
           </div>
 
           <div class="chat-messages" ref="msgBox" @scroll.passive="onChatScroll">
@@ -239,6 +213,7 @@
           <div class="toc-header">
             <span>文档目录</span>
             <div class="toc-head-right">
+              <button v-if="stage === 'done'" class="toc-batch-btn ghost" :disabled="!canWriteAll" @click="writeAllChapters">重写全文</button>
               <span v-if="tocChapters.length" class="toc-count num">{{ treeCount(tocChapters) }}</span>
               <button v-if="unwrittenCount" class="toc-batch-btn ghost" :disabled="outlinesGen" :title="'为 ' + unwrittenCount + ' 个尚无思路的章节生成编写思路'" @click="genOutlines">
                 {{ outlinesGen ? '思路生成中…' : '生成思路' }}<i v-if="unwrittenCount" class="toc-unw-num num">{{ unwrittenCount }}</i>
@@ -256,7 +231,7 @@
           <div v-if="!tocChapters.length" class="toc-empty">
             <div class="toc-empty-icon">☰</div>
             <p>尚未生成目录</p>
-            <p class="toc-empty-sub">点击顶部「开始编制」<br>AI 将根据招标资料生成目录</p>
+            <p class="toc-empty-sub">点击顶部「生成目录」<br>AI 将根据招标资料生成目录</p>
           </div>
           <el-tree
             v-else
@@ -304,8 +279,8 @@
             <span class="content-title">{{ activeChapterTitle || '正文' }}</span>
             <span v-if="activeChapterTitle" class="content-hint">在左侧目录切换章节</span>
             <span class="spacer-inline" />
-            <span v-if="lastSaved" class="content-saved" :class="{ dirty: autoSaving }">
-              {{ autoSaving ? '保存中…' : '上次保存 ' + fmtSaved(lastSaved) }}
+            <span v-if="activeNodeId" class="content-saved" role="status" :class="{ dirty: autoSaving, 'save-error': saveError }">
+              {{ autoSaving ? '保存中…' : saveError ? '保存失败，请重试保存' : lastSaved ? '已保存 · ' + fmtSaved(lastSaved) : '尚无保存记录' }}
             </span>
           </div>
 
@@ -400,7 +375,7 @@
               <p v-if="genPhase === 'prepare'" class="pl-text">正在整理「{{ activeChapterTitle }}」素材…</p>
               <p v-else class="pl-text">AI 正在撰写「{{ activeChapterTitle }}」…</p>
               <p class="pl-sub">{{ genPhase === 'prepare'
-                ? '检索项目文件 · 选取工艺工法 · 匹配知识页'
+                ? '检索项目文件 · 匹配参考素材与已确认资料'
                 : '正在生成首段正文（此阶段约需数秒，请稍候）' }}</p>
             </div>
             <TiptapEditor
@@ -411,7 +386,7 @@
               :project-id="projectId"
               :can-generate="canGenerateEditor"
               :generating="activeIsGenerating"
-              :external-locked="showCompanyFill || preparingCompanyFill"
+              :external-locked="showProposalCheck"
               @generate="editorGenerate"
               @save="saveChapter"
               class="content-editor"
@@ -419,7 +394,7 @@
             <div v-else class="content-empty">
               <div class="ce-icon">✎</div>
               <p class="ce-title">{{ tocChapters.length ? '在左侧目录选择章节' : '正文将在这里生成' }}</p>
-              <p class="ce-sub" v-if="!tocChapters.length">确认目录与编写思路后，AI 将逐章撰写，<br>生成后可直接在此编辑修改</p>
+              <p class="ce-sub" v-if="!tocChapters.length">生成目录与编写思路后，点击「生成全文」，<br>生成的正文可直接编辑修改</p>
             </div>
           </div>
         </div>
@@ -488,15 +463,17 @@
       </template>
     </el-dialog>
 
-    <!-- 全局参数抽屉 -->
-    <FactDrawer v-model="showFacts" :project-id="projectId" @changed="refreshPendingFacts" />
+    <!-- 项目关键参数抽屉 -->
+    <FactDrawer v-model="showFacts" :project-id="projectId" :has-selected-lot="!!selectedLot" @changed="refreshPendingFacts" />
     <!-- 排版设置抽屉（导出 Word 的规格） -->
-    <StyleDrawer v-model="showStyle" :project-id="projectId" />
+    <StyleDrawer v-model="showStyle" :project-id="projectId" @saved="styleRevision++" />
     <!-- 篇幅控制抽屉（目标正文页数 → 各章目标字数） -->
-    <PagesDrawer v-model="showPages" :project-id="projectId" />
-    <ProposalCheckDrawer v-model="showProposalCheck" :project-id="projectId" />
+    <PagesDrawer v-model="showPages" :project-id="projectId" :style-revision="styleRevision" />
+    <ProposalCheckDrawer v-model="showProposalCheck" :project-id="projectId" :node-id="activeNodeId" :writing="stage === 'writing' || activeIsGenerating" @locate="switchToNode" @changed="companyFillChanged" @company="showCompanyLibrary = true" @pages="showPages = true" @source="openFileSections" />
     <ProjectUnderstandingDrawer v-model="showUnderstanding" :project-id="projectId" />
-    <CompanyFillDrawer v-model="showCompanyFill" :project-id="projectId" :node-id="activeNodeId" @changed="companyFillChanged" />
+    <el-drawer v-model="showCompanyLibrary" title="本公司资料" size="85%" destroy-on-close>
+      <CompanyProfileView />
+    </el-drawer>
     <!-- 章节索引查看抽屉（文件旁 ☰ 按钮） -->
     <FileSectionsDrawer v-model="showFileSections" :project-id="projectId" :file-id="sectionFile?.id" :file-name="sectionFile?.file_name || ''" />
 
@@ -595,7 +572,7 @@
         <!-- ⑤ 有标段划分但未选定：列出标段，选中即自动建立该标段档案 -->
         <template v-else-if="!selectedLot">
           请选择要编制档案的标段
-          <div class="lp-empty-sub">本项目共 {{ lotList.length }} 个标段，选中后自动抽取该标段档案并按本标段重提取全局参数</div>
+          <div class="lp-empty-sub">本项目共 {{ lotList.length }} 个标段，选中后自动抽取该标段档案并按本标段重提取项目关键参数</div>
           <div class="lot-pick">
             <button
               v-for="l in lotList" :key="l.id"
@@ -764,7 +741,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+// 暂时隐藏项目对话助手；保留实现，便于后续恢复。
+const CHAT_ASSISTANT_ENABLED = false
+const filesCollapsed = ref(true)
+const showWorkspaceSettings = ref(false)
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
+const CompanyProfileView = defineAsyncComponent(() => import('./CompanyProfileView.vue'))
+const showCompanyLibrary = ref(false)
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listFiles, uploadFile, deleteProjectFile, reparseProjectFile, chatStream, getChatHistory, clearChatHistory, compileStart, compileStatus, writeAll, taskStatus, listFacts, selectLot, extractLots, getLotsStatus, getLotProfile, saveLotProfile, rebuildLotProfile, getLotProfileRebuildStatus, getUsedDetail, tocPreview, tocApply, generateTreeOutlines, listKnowledgePages, getKnowledgePage, listRequirements,
@@ -777,24 +760,8 @@ import { genreOf } from '../genre'
 import TiptapEditor from '../components/TiptapEditor.vue'
 import FactDrawer from '../components/FactDrawer.vue'
 import ProjectUnderstandingDrawer from '../components/ProjectUnderstandingDrawer.vue'
-import CompanyFillDrawer from '../components/CompanyFillDrawer.vue'
-const showCompanyFill = ref(false)
 const bodyEditor = ref(null)
-const preparingCompanyFill = ref(false)
 let pendingBodySave = Promise.resolve()
-async function openCompanyFill(){
-  const pending=bodyEditor.value?.prepareExternalEdit()
-  preparingCompanyFill.value=true
-  try {
-    await pendingBodySave.catch(()=>{})
-    if(pending?.dirty && activeNodeId.value){
-      await saveSectionContent(activeNodeId.value,{format:'html',body:pending.html})
-      await loadContent(activeNodeId.value)
-    }
-    showCompanyFill.value=true
-  } catch(e){ElMessage.error('当前正文保存失败，请先保存后再补全')}
-  finally {preparingCompanyFill.value=false}
-}
 async function companyFillChanged(id){
   if(Number(activeNodeId.value)===Number(id))await loadContent(activeNodeId.value)
 }
@@ -804,6 +771,35 @@ import StyleDrawer from '../components/StyleDrawer.vue'
 import PagesDrawer from '../components/PagesDrawer.vue'
 import ProposalCheckDrawer from '../components/ProposalCheckDrawer.vue'
 const showProposalCheck = ref(false)
+async function openProposalCheck() {
+  try {
+    const pending = bodyEditor.value?.prepareExternalEdit()
+    await pendingBodySave
+    if (pending?.dirty && activeNodeId.value) {
+      await saveSectionContent(activeNodeId.value, { format: 'html', body: pending.html })
+      await loadContent(activeNodeId.value)
+    }
+    showProposalCheck.value = true
+  } catch (e) { ElMessage.error('正文尚未保存成功，请先保存后再检查') }
+}
+
+function openWorkspaceResource(command) {
+  if (command === 'files') filesCollapsed.value = false
+  if (command === 'facts') showFacts.value = true
+  if (command === 'company') showCompanyLibrary.value = true
+  if (command === 'style') showStyle.value = true
+  if (command === 'pages') showPages.value = true
+}
+const currentWorkflowStep = computed(() => !files.value.length ? 1 : !tocChapters.value.length ? 2 : stage.value === 'done' ? 4 : 3)
+const workspaceGuidance = computed(() => {
+  if (stage.value === 'writing') return '可以切换查看其他章节，生成结果会自动保存。'
+  if (stage.value === 'generating_toc' || stage.value === 'generating_outline') return '正在准备目录和编写思路，请等待当前任务完成。'
+  if (stage.value === 'failed') return '查看错误详情，核对资料后再重试。'
+  if (!files.value.length) return '先打开项目文件，上传本次招标文件。'
+  if (!tocChapters.value.length) return '先核对项目理解，设置排版与页数，再生成目录。'
+  if (stage.value === 'done') return '正文已生成；核对响应、处理缺项后导出 Word。'
+  return '核对左侧目录，在正文区逐章编写，或生成全文。'
+})
 
 const props = defineProps({ projectId: String })
 const router = useRouter()
@@ -813,6 +809,7 @@ const input = ref('')
 const msgBox = ref(null)
 const showFacts = ref(false)
 const showStyle = ref(false)   // 排版设置抽屉（导出 Word 的规格）
+const styleRevision = ref(0)
 const showPages = ref(false)   // 篇幅控制抽屉（目标正文页数 → 各章目标字数）
 
 // 章节索引查看（文件旁 ☰ 按钮）
@@ -837,7 +834,7 @@ async function loadGenre() {
   } catch { /* 体裁词取不到只是个文案，回落到中性词，不挡工作台 */ }
 }
 
-// 当前标段（顶栏常驻徽标 + 全局参数/图表/质检的过滤依据）
+// 当前标段（顶栏常驻徽标 + 项目关键参数/图表/质检的过滤依据）
 const selectedLot = ref(null)
 const lotList = ref([])   // 项目标段划分（区分"未划分标段"与"有标段但没选"）
 // 标段识别状态：供弹窗区分「没传招标文件 / 正在解析 / 正在识别 / 确实未划分」四种空态
@@ -927,7 +924,7 @@ const STAGES = [
   { idx: 2, key: 'generating_outline', label: '编写思路' },
   { idx: 3, key: 'outlines_ready', label: '待写正文' },
   { idx: 4, key: 'writing', label: '撰写正文' },
-  { idx: 5, key: 'done', label: '完成' },
+  { idx: 5, key: 'done', label: '已生成·待检查' },
 ]
 const stageOrder = (k) => {
   if (k === 'idle') return 0
@@ -1146,18 +1143,18 @@ async function openLotProfileSilent() {
 }
 
 // 选定标段并自动建立该标段档案（档案为空时的补救入口：项目有标段划分但一个都没选）
-// 任务内含两步（后端串行）：建本标段档案 → 按本标段重提取全局参数
+// 任务内含两步（后端串行）：建本标段档案 → 按本标段重提取项目关键参数
 async function pickLotAndBuild(lot) {
   if (lotProfileBusy.value) return
   lotProfileBusy.value = true
-  lotRebuildMsg.value = `正在切换到「${lot.lot_code}」：抽取标段档案并按本标段重提取全局参数…`
+  lotRebuildMsg.value = `正在切换到「${lot.lot_code}」：抽取标段档案并按本标段重提取项目关键参数…`
   try {
     await selectLot(Number(props.projectId), lot.id)
     await loadSelectedLot()   // 顶部标段徽章同步
     const { data } = await rebuildLotProfile(Number(props.projectId))
     if (data.task_id) await _pollRebuild(data.task_id)
     await openLotProfileSilent()
-    ElMessage.success(`已切换到「${lot.lot_code}」：档案已建立，全局参数已按本标段重提取`)
+    ElMessage.success(`已切换到「${lot.lot_code}」：档案已建立，项目关键参数已按本标段重提取`)
     // 标段变了 → 工作台的目录与事实按新标段刷新（不阻塞提示）
     loadTree()
     refreshPendingFacts()
@@ -1171,12 +1168,12 @@ async function pickLotAndBuild(lot) {
 
 async function doRebuildLotProfile() {
   lotProfileBusy.value = true
-  lotRebuildMsg.value = '正在抽取标段档案并按本标段重提取全局参数…'
+  lotRebuildMsg.value = '正在抽取标段档案并按本标段重提取项目关键参数…'
   try {
     const { data } = await rebuildLotProfile(Number(props.projectId))
     if (data.task_id) await _pollRebuild(data.task_id)
     await openLotProfileSilent()
-    ElMessage.success('标段档案已更新，全局参数已按本标段重提取')
+    ElMessage.success('标段档案已更新，项目关键参数已按本标段重提取')
     refreshPendingFacts()
   } catch (e) {
     ElMessage.error('抽取失败：' + (e?.response?.data?.detail || e.message))
@@ -1318,6 +1315,7 @@ async function loadContent(nodeId) {
     activeChapterUsed.value = data.found ? (data.content.used || null) : null
     activeNodeStatus.value = data.status || activeNodeStatus.value
     lastSaved.value = data.saved_at || ''
+    saveError.value = false
   } catch {
     activeChapterContent.value = ''
     aiGenerated.value = false
@@ -1380,6 +1378,7 @@ const CTX_ITEMS = [
 ]
 
 function onNodeContextMenu(e, data) {
+  if (!CHAT_ASSISTANT_ENABLED) return
   ctxMenu.value = { show: true, x: e.clientX, y: e.clientY, title: data.title, node: data }
   window.addEventListener('click', closeCtx, { once: true })
 }
@@ -1432,7 +1431,7 @@ async function revertChapter() {
 
 // ---------- 章节选择 ----------
 const activeOutline = ref(null)
-const outlineOpen = ref(true)
+const outlineOpen = ref(false)
 const outlineEditing = ref(false)
 const outlineSaving = ref(false)
 const editOutline = ref({ thinking: '', need_table: false, need_image: false })
@@ -1578,6 +1577,7 @@ async function saveOutline() {
 const activeNodeStatus = ref(null)
 const lastSaved = ref('')
 const autoSaving = ref(false)
+const saveError = ref(false)
 const fmtSaved = (t) => (t ? new Date(t).toLocaleTimeString('zh-CN', { hour12: false }) : '')
 
 // 编辑区顶部"生成本章"：思路已定/已生成/已确认 且非生成中才可点
@@ -1621,6 +1621,7 @@ function editorGenerate() {
 async function saveChapter(html, auto = false) {
   if (!activeNodeId.value) return ElMessage.warning('请先在目录中选择章节')
   autoSaving.value = true
+  saveError.value = false
   try {
     pendingBodySave = saveSectionContent(activeNodeId.value, { format: 'html', body: html })
     const { data } = await pendingBodySave
@@ -1628,6 +1629,7 @@ async function saveChapter(html, auto = false) {
     await loadTree()
     if (!auto) ElMessage.success('已保存到服务器')
   } catch (e) {
+    saveError.value = true
     ElMessage.error('保存失败：' + (e?.response?.data?.detail || e.message))
   } finally {
     autoSaving.value = false
@@ -1640,7 +1642,7 @@ const stageText = computed(() => ({
   generating_outline: '正在生成编写思路…',
   outlines_ready: '思路已确认，待写正文',
   writing: '正在批量撰写正文…',
-  done: '编制完成',
+  done: '正文已生成，请进行检查与补全',
   failed: '出错',
 }[stage.value] || stage.value))
 
@@ -1868,7 +1870,7 @@ async function poll() {
       await loadTree()
       if (activeNodeId.value) await loadContent(activeNodeId.value)
     }
-    if (['done', 'failed', 'outlines_ready'].includes(data.stage)) stopPolling()
+    if (['idle', 'done', 'failed', 'outlines_ready'].includes(data.stage)) stopPolling()
   } catch (e) { /* 忽略轮询偶发错误 */ }
 }
 
@@ -2224,6 +2226,7 @@ const tocTreeRef = ref(null)
 async function switchToNode(nodeId) {
   await loadTree()
   const node = findNodeById(tocChapters.value, nodeId)
+  if (!node) { ElMessage.warning('该章节已变化或被删除，请刷新检查结果'); return }
   // 与目录点击一致：切到别的章即放弃流式渲染；切到生成中的章不拉库（等生成完成）
   if (genNodeId.value && genVisible.value && nodeId !== genNodeId.value) genVisible.value = false
   activeNodeId.value = nodeId
@@ -2376,7 +2379,7 @@ async function loadOlderChat() {
   }
 }
 
-onMounted(() => { loadFiles(); loadTree(); refreshPendingFacts(); loadChatHistory(); loadSelectedLot(); recoverOutlineTasks(); loadGenre() })
+onMounted(() => { loadFiles(); loadTree(); refreshPendingFacts(); if (CHAT_ASSISTANT_ENABLED) loadChatHistory(); loadSelectedLot(); recoverOutlineTasks(); loadGenre(); startPolling() })
 onUnmounted(() => {
   stopPolling(); if (pollRowsTimer) { clearInterval(pollRowsTimer); pollRowsTimer = null }
   if (chatAbortCtrl) chatAbortCtrl.abort()  // 离开页面中止对话（部分回复后端照常落库）
@@ -2431,9 +2434,15 @@ onUnmounted(() => {
 
 .ws-body { flex: 1; display: flex; min-height: 0; }
 
-.sidebar { width: 400px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--ink-900); border-right: 1px solid var(--ink-line); }
+.sidebar { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--ink-900); border-right: 1px solid var(--ink-line); }
+.workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: var(--ink-900); border-bottom: 1px solid var(--ink-line); }
+.action-step { color: var(--ink-text-3); font-size: 11px; padding-left: 12px; border-left: 1px solid var(--ink-line-strong); white-space: nowrap; }
+.workspace-actions .el-button + .el-button { margin-left: 0; }
+.files-toggle { min-width: 110px; }
+.content-saved.save-error { color: var(--red); font-weight: 600; }
+.sidebar > .progress-card { flex-shrink: 0; max-height: 40%; overflow-y: auto; }
 .side-block { display: flex; flex-direction: column; min-height: 0; }
-.files-block { flex: 0 0 auto; max-height: 40%; border-bottom: 1px solid var(--ink-line); }
+.files-block { flex: 1; min-height: 0; border-bottom: 1px solid var(--ink-line); }
 .chat-block { flex: 1; position: relative; }
 .chat-jump {
   position: absolute; right: 16px; bottom: 64px; z-index: 5;
@@ -3083,4 +3092,58 @@ onUnmounted(() => {
 }
 .ctx-item:hover { background: var(--brand-soft); color: var(--brand); }
 .ctx-icon { display: flex; align-items: center; }
+
+/* 工作台统一布局：主流程、上下文操作、目录与正文。 */
+.workspace { background:#f3f5f9; color:#24334b; }
+.ws-topbar { height:64px; min-height:64px; background:#fff; border-bottom:1px solid #e5eaf1; padding:0 24px; gap:14px; }
+.ws-name { color:#1e2c43; font-size:16px; letter-spacing:.3px; }
+.ws-id { color:#8590a3; padding-left:10px; border-left:1px solid #e0e5ed; }
+.back-btn { border:0; color:#64748b; padding:8px 0; margin-right:8px; }
+.back-btn:hover { color:#315bd6; }
+.lot-badge { color:#61728c; background:#f3f6fb; border:1px solid #e1e7f0; padding:5px 10px; font-weight:500; margin-left:0; }
+.resource-button { border:0; background:transparent; padding:8px 10px; font-size:12px; color:#53637b; cursor:pointer; }
+.workflow-nav { display:flex; align-items:center; justify-content:center; gap:30px; padding:17px 24px; background:#fff; border-bottom:1px solid #e5eaf1; flex-shrink:0; }
+.workflow-step { display:flex; align-items:center; gap:12px; padding:8px 14px; border:0; border-radius:10px; background:transparent; font:inherit; color:#64748b; text-align:left; }
+button.workflow-step { cursor:pointer; }
+button.workflow-step:hover { background:#f4f7fc; color:#315bd6; }
+.workflow-step > span:last-child { font-size:13px; font-weight:600; }
+.workflow-step small { display:block; font-size:11px; color:#94a0b3; font-weight:400; margin-top:4px; }
+.step-number { display:grid; place-items:center; width:32px; height:32px; border-radius:10px; background:#f1f4f9; color:#8592a7; font-size:12px; font-weight:700; }
+.workflow-step.active { background:#eef3ff; color:#315bd6; }
+.workflow-step.active .step-number { background:#315bd6; color:white; }
+.workflow-chevron { color:#c2cbd8; font-size:22px; }
+.workspace-settings { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 24px; background:#edf3ff; border-bottom:1px solid #dce6fa; font-size:12px; color:#526783; }.workspace-settings strong { color:#315bd6; }.workspace-settings > span { margin-right:auto; }
+.workspace-context { display:flex; align-items:center; gap:20px; padding:13px 24px; flex-shrink:0; }
+.file-switch { border:1px solid #dae2ee; background:#fff; border-radius:7px; padding:8px 12px; color:#53637b; font-size:12px; cursor:pointer; white-space:nowrap; }
+.file-switch span { color:#315bd6; margin-left:6px; }
+.context-copy { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.context-copy strong { font-size:12px; color:#33435c; }
+.context-copy > span { font-size:11px; color:#8090a5; }
+.context-actions { margin-left:auto; display:flex; gap:8px; align-items:center; flex-shrink:0; }
+.context-actions .el-button + .el-button { margin-left:0; }
+.context-progress { font-size:12px; color:#53637b; }
+.ws-body { margin:0 20px 20px; border:1px solid #e1e7f0; border-radius:12px; overflow:hidden; background:white; box-shadow:0 4px 20px #24334b05; }
+.editor-area { border-radius:0; background:#f5f7fa; }
+.toc-panel { width:272px; background:#fbfcfe; border-right:1px solid #e7ecf3; }
+.toc-header { padding:16px 14px; flex-wrap:wrap; gap:10px; }
+.toc-header > span { color:#26364e; font-size:13px; }
+.toc-head-right { flex-wrap:wrap; }
+.content-header { min-height:58px; border-bottom:1px solid #e8edf4; padding:12px 24px; background:#fff; }
+.content-title { color:#24334b; font-size:15px; }
+.content-hint { display:none; }
+.sidebar { width:250px; background:#f8faff; border-right:1px solid #e3eaf4; }
+.sidebar .side-title { color:#33435c; }.sidebar .file-name { color:#44536b; }.sidebar .group-head { color:#6c7c93; }
+.sidebar .side-head { border-color:#e4eaf3; }.sidebar .file-item:hover { background:#edf2fb; }
+.sidebar .file-empty { color:#8492a6; }.sidebar .upload-btn { color:#315bd6; border-color:#cddbf8; background:#eef3ff; }
+.sidebar .progress-card { color:#53637b; background:#eff4fc; border-color:#dbe5f5; }
+@media(max-width:1200px) {
+  .workflow-nav { gap:8px; padding:10px 14px; }.workflow-step { padding:8px; gap:8px; }
+  .workspace-context { flex-wrap:wrap; gap:12px; padding:12px 16px; }.context-actions { flex-wrap:wrap; }
+  .toc-panel { width:240px; }.ws-body { margin:0 12px 12px; }
+}
+@media(max-width:800px) {
+  .workflow-nav { justify-content:flex-start; overflow-x:auto; }.workflow-step { flex-shrink:0; }.workflow-chevron { display:none; }
+  .workflow-step small { display:none; }.ws-topbar { padding:0 12px; }.context-copy { flex:1; }
+  .context-actions { width:100%; margin-left:0; }.sidebar { width:220px; }.toc-panel { width:210px; }
+}
 </style>

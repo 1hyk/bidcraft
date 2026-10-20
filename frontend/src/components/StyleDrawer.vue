@@ -120,7 +120,7 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   projectId: { type: String, default: '' },
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'saved'])
 
 const SIDES = [
   { key: 'margin_top_cm', label: '上' },
@@ -196,7 +196,8 @@ async function save() {
     const payload = { ...form }
     SIDES.forEach((s) => { payload[s.key] = Number(form[s.key]) || opt.value.default?.[s.key] || 2.0 })
     await saveDocxStyle(props.projectId, payload)
-    ElMessage.success('排版已保存，下次导出生效')
+    emit('saved')
+    ElMessage.success('排版已保存，篇幅估算与后续生成额度将按新排版计算')
     emit('update:modelValue', false)
   } catch (e) {
     ElMessage.error('保存失败：' + (e?.response?.data?.detail || e.message))

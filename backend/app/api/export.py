@@ -33,9 +33,18 @@ def review_proposal(project_id: int):
     from app.core.database import query_one
     if not query_one('SELECT id FROM project WHERE id=%s',(project_id,)):
         raise HTTPException(404,'项目不存在')
-    from app.services.proposal_quality import review
-    try:return review(project_id)
+    from app.services.requirement_matrix import run_review
+    try:return run_review(project_id)
     except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+
+
+@router.get('/{project_id}/requirements')
+def requirement_matrix(project_id: int):
+    from app.core.database import query_one
+    if not query_one('SELECT id FROM project WHERE id=%s',(project_id,)):
+        raise HTTPException(404,'项目不存在')
+    from app.services.requirement_matrix import matrix
+    return matrix(project_id)
 
 
 @router.post("/{project_id}/docx")

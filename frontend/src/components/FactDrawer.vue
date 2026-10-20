@@ -11,8 +11,8 @@
       <!-- 头部 -->
       <div class="fd-head">
         <div>
-          <div class="fd-title">全局参数</div>
-          <div class="fd-sub">AI 从项目文件抽取后即生效，可直接编辑修正</div>
+          <div class="fd-title">项目关键参数</div>
+          <div class="fd-sub">按用途查看招标文件提取的信息，可回查来源并修正</div>
         </div>
         <button class="fd-close" @click="emit('update:modelValue', false)">✕</button>
       </div>
@@ -20,7 +20,7 @@
       <!-- 提示条 -->
       <div class="fd-notice">
         <span class="fd-notice-icon">!</span>
-        <span>事实由 AI 从项目文件抽取，<b>抽取即生效</b>（无需确认，可编辑或删除）。</span>
+        <span>参数由 AI 从项目文件提取并供生成参考，请核对原文；<b>不代表公司已有能力</b>。用途分类仅调整展示，修改参数不会自动更新旧正文。</span>
       </div>
 
       <!-- 搜索 + 类别筛选 + 一键确认 -->
@@ -33,17 +33,18 @@
             :class="{ on: catFilter === c }" @click="catFilter = c">{{ c }}</button>
         </div>
         <!-- 按标段范围筛选 -->
-        <div class="fd-chips">
+        <div v-if="hasSelectedLot" class="fd-chips">
           <button v-for="s in SCOPE_FILTERS" :key="s" class="fd-chip scope"
             :class="{ on: scopeFilter === s }" @click="scopeFilter = s">{{ s }}</button>
         </div>
         <div class="fd-batch-row">
           <span class="fd-batch-info">共 <b class="num">{{ facts.length }}</b> 条事实</span>
-          <!-- 手动按本标段重提取：档案已建好、只想把全局参数按当前标段重刷一遍时用
+          <!-- 手动按本标段重提取：档案已建好、只想把项目关键参数按当前标段重刷一遍时用
                （档案本身不动；要连档案一起重抽走「标段档案 → 重新抽取」） -->
-          <button class="fd-re-btn" :disabled="extracting" :title="extractMsg || '按当前选定标段重新提取全局参数'" @click="doReextract">
+          <button v-if="hasSelectedLot" class="fd-re-btn" :disabled="extracting" :title="extractMsg || '按当前选定标段重新提取项目关键参数'" @click="doReextract">
             {{ extracting ? (extractMsg || '提取中…') : '按本标段重新提取' }}
           </button>
+          <span v-else class="fd-batch-info">当前按整个项目查看；参数随文件解析提取，无需选择标段。</span>
         </div>
       </div>
 
@@ -63,7 +64,7 @@
           <div class="fact-main">
             <div class="fact-row1">
               <span class="fact-key">{{ f.fact_key }}</span>
-              <span class="fact-cat">{{ f.category }}</span>
+              <span class="fact-cat">{{ factCategory(f) }}</span>
               <span v-if="lotLabel(f)" class="fact-tag lot" :title="'该事实适用于：' + lotLabel(f)">{{ lotLabel(f) }}</span>
               <span v-if="f.status === 'expired'" class="fact-tag expired">已过期</span>
             </div>
@@ -85,20 +86,22 @@
 </template>
 
 <script setup>
+import { FACT_CATEGORIES, factCategory } from '../factCategories'
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listFacts, confirmFact, confirmAllFacts, updateFact, deleteFact, reextractFacts, taskStatus } from '../api'
 
 const props = defineProps({
+  hasSelectedLot: { type: Boolean, default: false },
   modelValue: { type: Boolean, default: false },
   projectId: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'changed'])
 
-const CATEGORIES = ['工期', '人员', '机械', '造价', '地质', '结构', '质量标准', '安全目标', '其他']
+const CATEGORIES = FACT_CATEGORIES
 const catFilter = ref('全部')
 // 标段范围筛选（与后端 scope 对应；"全线"含 all 与 background 两类）
-const SCOPE_FILTERS = ['全部范围', '本标段', '全线', '归属未判定']
+const SCOPE_FILTERS = ['全部范围', '本标段', '项目通用', '归属未判定']
 const scopeFilter = ref('全部范围')
 const isLowConf = (f) => typeof f.confidence === 'number' && f.confidence < 0.8
 const lowConfCount = computed(() => facts.value.filter(isLowConf).length)
@@ -119,8 +122,8 @@ async function load() {
   }
 }
 
-// 按当前选定标段重新提取全局参数（后台任务 + 轮询）。
-// **只重提取事实，不动标段档案**——档案已建好、只想把全局参数按标段重刷时用这个；
+// 按当前选定标段重新提取项目关键参数（后台任务 + 轮询）。
+// **只重提取事实，不动标段档案**——档案已建好、只想把项目关键参数按标段重刷时用这个；
 // 要连档案一起重抽，走工作台的「标段档案 → 重新抽取」。
 async function doReextract() {
   if (extracting.value) return
@@ -142,7 +145,7 @@ async function doReextract() {
       }
     }
     await load()
-    ElMessage.success('全局参数已按本标段重新提取')
+    ElMessage.success('项目关键参数已按本标段重新提取')
     emit('changed')   // 通知父组件（顶栏待确认数等）刷新
   } catch (e) {
     ElMessage.error('重新提取失败：' + (e?.response?.data?.detail || e.message))
@@ -154,10 +157,10 @@ async function doReextract() {
 
 const filteredFacts = computed(() => {
   let list = facts.value
-  if (catFilter.value !== '全部') list = list.filter(f => f.category === catFilter.value)
-  if (scopeFilter.value === '本标段') list = list.filter(f => f.scope === 'mine')
-  else if (scopeFilter.value === '全线') list = list.filter(f => f.scope === 'all' || f.scope === 'background')
-  else if (scopeFilter.value === '归属未判定') list = list.filter(f => f.scope === 'unknown')
+  if (catFilter.value !== '全部') list = list.filter(f => factCategory(f) === catFilter.value)
+  if (props.hasSelectedLot && scopeFilter.value === '本标段') list = list.filter(f => f.scope === 'mine')
+  else if (props.hasSelectedLot && scopeFilter.value === '项目通用') list = list.filter(f => f.scope === 'all' || f.scope === 'background')
+  else if (props.hasSelectedLot && scopeFilter.value === '归属未判定') list = list.filter(f => f.scope === 'unknown')
   if (keyword.value.trim()) {
     const k = keyword.value.trim().toLowerCase()
     list = list.filter(f =>
@@ -195,7 +198,7 @@ async function confirmAll() {
 function lotLabel(f) {
   const s = f.scope
   if (s === 'mine') return '本标段'
-  if (s === 'all' || s === 'background') return '全线'
+  if (s === 'all' || s === 'background') return '项目通用'
   if (s === 'unknown') return '归属未判定'
   let lots = f.applicable_lots
   if (typeof lots === 'string') { try { lots = JSON.parse(lots) } catch { lots = null } }

@@ -1,6 +1,6 @@
 """经验条目服务（M3-4）：沉淀入库 + 生成时匹配注入。
 
-- save_experience：去重（同域同章节同内容）后入 experience_item（直接 confirmed）；
+- save_experience：去重（同域同章节同内容）后入 experience_item（待审核 pending）；
 - match_experiences：编写/思路生成时按章节标题相似度匹配【已确认】经验，
   全局条目（chapter_type 为空）恒入；优先级高于知识页（用户偏好级，方案 M3-4）。
 
@@ -54,7 +54,7 @@ def strip_chapter_no(t: str) -> str:
 
 
 def save_experience(item: dict, domain: str = "") -> int | None:
-    """入库（2026-09-08 起直接 confirmed，无需人工确认：对话/编写沉淀的经验即认为可用）。
+    """新提炼经验以 pending 入库，人工确认后才参与生成。
     同域同章节同内容去重，返回 id 或 None。
 
     `domain` 缺省时从 `item["source"]["project_id"]` 反查——三个提炼入口都会把来源
@@ -83,7 +83,7 @@ def save_experience(item: dict, domain: str = "") -> int | None:
     return execute(
         "INSERT INTO experience_item"
         " (exp_type, chapter_type, tags, content, source, status, domain)"
-        " VALUES (%s, %s, %s, %s, %s, 'confirmed', %s)",
+        " VALUES (%s, %s, %s, %s, %s, 'pending', %s)",
         (
             item.get("exp_type", "编写经验"), chapter_type,
             json.dumps(item.get("tags") or [], ensure_ascii=False),

@@ -18,10 +18,14 @@ from app.services import generated_images as images, image_completion as complet
 from app.services.image_retrieval import selected_ids
 from app.services.image_ownership import ProjectImages
 from app.services.docx_export import _render_html
+_REAL_VISUAL_VALIDATOR = images.validate_visual
 
 
 class GeneratedImagesTests(unittest.TestCase):
     def setUp(self):
+        visual = patch.object(images, 'validate_visual')
+        visual.start()
+        self.addCleanup(visual.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         for field, value in {"uploads_dir": Path(self.tmp.name), "image_generation_enabled": True,
@@ -59,6 +63,37 @@ class GeneratedImagesTests(unittest.TestCase):
         self.assertEqual(calls[0].headers["Authorization"], "Bearer test-secret")
         self.assertNotIn("authorization", calls[1].headers)
         self.assertEqual(json.loads(calls[0].content)["parameters"]["n"], 1)
+        self.assertFalse(json.loads(calls[0].content)["parameters"]["watermark"])
+
+    def test_rejected_image_is_not_published_or_charged_again(self):
+        with patch.object(images,'_request_image',return_value=self.png) as request, \
+             patch.object(images,'validate_visual',side_effect=images.ImageGenerationError('场景不符')):
+            for _ in range(2):
+                with self.assertRaisesRegex(images.ImageGenerationError,'场景不符'):
+                    images.generate(4,1,self.need,'正文')
+        self.assertEqual(request.call_count,1)
+        self.assertEqual(images.catalog(4),[])
+
+    def test_text_instructions_removed_without_erasing_scene(self):
+        need={**self.need,'prompt':'无人机测试场地，包含跑道与指挥中心，标注中文区域名称。'}
+        with patch.object(images,'_request_image',return_value=self.png) as request:
+            images.generate(4,1,need,'正文')
+        prompt=request.call_args.args[0]
+        self.assertIn('无人机测试场地',prompt)
+        self.assertIn('跑道与指挥中心',prompt)
+        self.assertNotIn('标注中文',prompt)
+        self.assertNotIn('generic workspace',prompt)
+
+    def test_visual_gate_rejects_wrong_scene_text_and_uncertain_json(self):
+        path=Path(self.tmp.name)/'probe.png';path.write_bytes(self.png)
+        for result in [{'relevant':False,'has_text':False},
+                       {'relevant':True,'has_text':True},
+                       {'relevant':'true','has_text':False}, {}]:
+            with patch('app.services.llm.llm.chat',return_value=json.dumps(result)):
+                with self.assertRaises(images.ImageGenerationError):
+                    _REAL_VISUAL_VALIDATOR(path,self.need)
+        with patch('app.services.llm.llm.chat',return_value='{"relevant":true,"has_text":false}'):
+            _REAL_VISUAL_VALIDATOR(path,self.need)
 
     def test_http_failure_is_not_retried(self):
         handler = Mock(return_value=httpx.Response(403))

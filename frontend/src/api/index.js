@@ -54,6 +54,7 @@ export const uploadEditorImage = (projectId, file) => {
   return api.post(`/projects/${projectId}/files/image`, form)
 }
 export const fileSections = (projectId, fileId) => api.get(`/projects/${projectId}/files/${fileId}/sections`)
+export const locateRequirementSource = (projectId, fileId, requirementId) => api.get(`/projects/${projectId}/files/${fileId}/locate-requirement/${requirementId}`)
 export const fileSectionContent = (projectId, fileId, indexId) =>
   api.get(`/projects/${projectId}/files/${fileId}/sections/${indexId}/content`)
 export const uploadFile = (projectId, file, category, onProgress) => {
@@ -246,5 +247,6 @@ export const measurePagePlan = (projectId) => api.post(`/projects/${projectId}/p
 export const adjustPagePlan = (projectId) => api.post(`/projects/${projectId}/page-plan/adjust`)
 export const checkProposal = (projectId) => api.get(`/export/${projectId}/check`)
 export const reviewProposal = (projectId) => api.post(`/export/${projectId}/review`, null, { timeout: 300000 })
+export const proposalRequirements = (projectId) => api.get(`/export/${projectId}/requirements`)
 
 export default api

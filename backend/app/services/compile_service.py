@@ -381,6 +381,9 @@ def generate_pending_outlines(task_id: int, project_id: int) -> int:
     # 第二道墙：同域里「别的项目」的标书不该进本项目的候选池（见 matching._scope_sql）
     summaries = load_page_summaries(dom, project_id)
 
+    from app.services.compilation_requirements import load_requirements, requirements_text
+    contract = load_requirements(project_id)
+
     def _one(r):
         parent = title_of.get(r["parent_id"]) if r["parent_id"] else None
         path = [parent] if parent else []
@@ -389,12 +392,15 @@ def generate_pending_outlines(task_id: int, project_id: int) -> int:
             chapter_title=r["title"], chapter_type="",
             project_facts=facts, knowledge_pages=pages,
             experiences=match_experiences(r["title"], path, dom),
+            reqs_text=requirements_text(contract, [r["title"], *path]),
             lot_brief=lot_text, domain=dom, project_id=project_id,
         )
         outline["_toc_title"] = r["title"]
         outline["_parent"] = parent or ""
         outline["_page_ids"] = [pp["id"] for pp in pages]
-        save_outline(project_id, r["title"], outline)
+        from app.services.section_service import update_outline_by_id
+        if not update_outline_by_id(project_id, r["id"], outline):
+            raise ValueError(f"章节思路未保存：{r['title']}")
 
     done = 0
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -424,6 +430,7 @@ def regenerate_node_outline(task_id: int, project_id: int, node_id: int) -> dict
     from app.services.lot_profile_service import lot_brief
     from app.services.matching import load_page_summaries, match_pages
     from app.services.requirement_service import requirements_for_chapter_text
+    from app.services.compilation_requirements import load_requirements, requirements_text
     from app.services.section_service import update_outline_by_id
 
     from app.services.section_service import generation_node_ids
@@ -462,7 +469,8 @@ def regenerate_node_outline(task_id: int, project_id: int, node_id: int) -> dict
             chapter_title=title, chapter_type="",
             project_facts=confirmed_facts(project_id), knowledge_pages=pages,
             experiences=match_experiences(title, path, dom),
-            reqs_text=requirements_for_chapter_text(project_id, title),
+            reqs_text=requirements_text(load_requirements(project_id), [title, *path])
+                      or requirements_for_chapter_text(project_id, title),
             lot_brief=lot_text, domain=dom, project_id=project_id,
         )
         outline["_toc_title"] = title

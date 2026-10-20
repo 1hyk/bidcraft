@@ -1,9 +1,25 @@
 <template>
   <div class="home">
+    <section class="welcome-panel">
+      <div class="welcome-copy">
+        <span class="welcome-eyebrow">嘉驰科技咨询 · 技术方案工作台</span>
+        <h1>技术方案，从这里开始</h1>
+        <p>以招标要求为依据，结合公司资料与历史经验，完成编写、检查与导出。</p>
+        <div class="welcome-actions">
+          <el-button type="primary" size="large" @click="openCreate">＋ 新建编制项目</el-button>
+          <router-link to="/company">管理公司资料 <span>↗</span></router-link>
+        </div>
+      </div>
+      <ol class="welcome-flow" aria-label="方案编制流程">
+        <li><span>01</span><div><strong>导入招标文件</strong><small>梳理项目要求与评分重点</small></div></li>
+        <li><span>02</span><div><strong>确认目录与编写</strong><small>选择排版，设置目标页数</small></div></li>
+        <li><span>03</span><div><strong>检查并导出</strong><small>核对响应内容，完善定稿</small></div></li>
+      </ol>
+    </section>
     <!-- 页头 -->
     <header class="page-head">
       <div class="head-left">
-        <h1 class="page-title">我的项目</h1>
+        <h2 class="page-title">我的项目</h2>
         <span class="page-count num">{{ projects.length }} 个项目</span>
       </div>
       <div class="head-tools">
@@ -37,9 +53,6 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button type="primary" @click="openCreate" class="btn-new">
-          <span class="plus">＋</span> 新建项目
-        </el-button>
       </div>
     </header>
 
@@ -48,22 +61,22 @@
       <div v-if="!loading && filtered.length === 0" class="empty-wrap">
         <div class="empty-card">
           <div class="empty-icon">◈</div>
-          <p class="empty-title">还没有项目</p>
-          <p class="empty-desc">新建项目后，上传招标文件即可开始 AI 编制</p>
+          <p class="empty-title">{{ keyword || domainFilter || typeFilter ? '未找到匹配项目' : '还没有项目' }}</p>
+          <p class="empty-desc">{{ keyword || domainFilter || typeFilter ? '试试其他关键词，或调整筛选条件。' : '新建项目后，上传招标文件即可开始编制。' }}</p>
           <el-button type="primary" @click="openCreate">新建第一个项目</el-button>
         </div>
       </div>
 
       <div v-else class="card-grid">
-        <div v-for="(p, i) in filtered" :key="p.id" class="project-card" @click="enter(p.id)">
+        <div v-for="(p, i) in filtered" :key="p.id" class="project-card" role="link" tabindex="0" :aria-label="'进入项目：'+p.name" @click="enter(p.id)" @keydown.enter.self="enter(p.id)">
           <div class="card-top">
-            <div class="card-badge" :style="{ background: badgeBg(p.id), color: badgeColor(p.id) }">
+            <div class="card-badge" :title="p.project_types?.join('、') || '服务类型未确认'" :style="{ background: badgeBg(p.id), color: badgeColor(p.id) }">
               {{ p.project_types?.join('、') || '服务类型未确认' }}
             </div>
             <div class="card-top-right">
               <span class="card-no num">№ {{ String(p.id).padStart(3, '0') }}</span>
               <el-dropdown trigger="click" @command="(c) => onCardMenu(c, p)" @click.stop>
-                <button class="more-btn" @click.stop>⋯</button>
+                <button class="more-btn" :aria-label="p.name+'的项目操作'" @click.stop>⋯</button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="settings">项目设置</el-dropdown-item>
@@ -89,11 +102,13 @@
                 已选 {{ p.lots.find(l => l.selected).lot_code }}
               </span>
             </template>
-            <span v-else class="lot-text muted">未上传招标文件 / 无标段划分</span>
+            <span v-else-if="p.has_parsed_tender" class="lot-text">招标文件已解析 · 无标段划分</span>
+            <span v-else-if="p.has_tender" class="lot-text muted">已上传招标文件 · 待完成解析</span>
+            <span v-else class="lot-text muted">未上传招标文件</span>
           </div>
           <div class="card-foot">
             <span class="card-time">{{ formatTime(p.updated_at) }}</span>
-            <span class="card-arrow">进入 →</span>
+            <span class="card-arrow">打开工作台 →</span>
           </div>
           <div class="card-accent" :style="{ background: badgeColor(p.id) }" />
         </div>
@@ -566,13 +581,27 @@ onMounted(async () => {
 
 <style scoped>
 .home { height: 100%; display: flex; flex-direction: column; padding: 28px 32px; }
+.home { height: auto; min-height: 100%; background: #f5f7fb; padding: 32px 40px; }
+.welcome-panel { display:flex; justify-content:space-between; gap:40px; padding:32px 36px; margin-bottom:32px; border:1px solid #dfe6f0; border-radius:18px; background:#fff; box-shadow:0 4px 24px #203a6010; }
+.welcome-eyebrow { display:block; color:#526785; font-size:12px; font-weight:600; letter-spacing:.08em; }
+.welcome-copy h1 { margin:16px 0 12px; font-size:30px; letter-spacing:-.03em; color:#172c4c; line-height:1.3; }
+.welcome-copy p { max-width:490px; margin:0; font-size:13px; color:#68778c; line-height:1.9; }
+.welcome-actions { display:flex; align-items:center; flex-wrap:wrap; gap:22px; margin-top:24px; }
+.welcome-actions a { color:#526785; text-decoration:none; font-size:13px; }
+.welcome-actions a:hover { color:var(--brand); }
+.welcome-actions a span { margin-left:10px; }
+.welcome-flow { list-style:none; margin:0; padding:0 0 0 30px; border-left:1px solid #e6ebf2; min-width:240px; display:flex; flex-direction:column; justify-content:center; gap:22px; }
+.welcome-flow li { display:flex; align-items:center; gap:14px; }
+.welcome-flow li>span { color:#466daa; border:1px solid #dce6f6; background:#f5f8fd; padding:8px; border-radius:10px; font-size:12px; font-family:var(--font-num); }
+.welcome-flow strong { display:block; font-size:13px; color:#263d5e; font-weight:600; }
+.welcome-flow small { display:block; color:#8993a4; font-size:11px; margin-top:5px; }
 
 /* 页头 */
 .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; gap: 16px; }
 .head-left { display: flex; align-items: baseline; gap: 14px; }
 .page-title { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: 0.01em; }
 .page-count { font-size: 12px; color: var(--text-3); }
-.head-tools { display: flex; align-items: center; gap: 10px; }
+.head-tools { display: flex; align-items: center; gap: 10px; flex-wrap:wrap; }
 .search { width: 200px; }
 .type-select { width: 110px; }
 .sort-btn {
@@ -586,7 +615,7 @@ onMounted(async () => {
 .plus { font-weight: 400; margin-right: 2px; }
 
 /* 卡片墙 */
-.card-area { flex: 1; overflow-y: auto; }
+.card-area { flex: 1; }
 .card-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px;
 }
@@ -599,6 +628,17 @@ onMounted(async () => {
 .project-card:hover {
   border-color: var(--line-strong); box-shadow: var(--shadow-pop); transform: translateY(-2px);
 }
+.project-card { border-color:#e0e6ef; border-radius:14px; min-height:180px; display:flex; flex-direction:column; box-shadow:0 2px 5px #233c5b04; }
+.project-card:hover,.project-card:focus-visible { border-color:#a8bfdf; box-shadow:0 8px 24px #233c5b0b; outline:2px solid transparent; }
+.project-card:focus-visible { outline-color:var(--brand); outline-offset:3px; }
+.project-card .card-accent { display:none; }
+.project-card .card-foot { margin-top:auto; padding-top:14px; }
+.project-card .card-title { color:#243855; font-size:16px; margin-bottom:12px; }
+.project-card .card-desc { margin-bottom:14px; }
+.project-card .card-arrow { opacity:1; font-size:11px; }
+.project-card .card-lots { margin-bottom:16px; }
+.project-card .card-badge { min-width:0; max-width:calc(100% - 78px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.project-card .card-top-right { flex-shrink:0; }
 .card-accent { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; opacity: 0.85; }
 .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .card-top-right { display: flex; align-items: center; gap: 8px; }
@@ -694,4 +734,18 @@ onMounted(async () => {
 .lot-name { font-size: 12px; color: var(--text-2); margin-top: 2px; }
 .lot-scope { font-size: 12px; color: var(--text-3); margin-top: 6px; line-height: 1.6; }
 .lot-price { font-size: 12px; color: var(--amber); margin-top: 6px; font-weight: 600; }
+@media (max-width:1200px) {
+  .home { padding:24px; }
+  .page-head { align-items:flex-start; flex-direction:column; }
+  .head-tools { width:100%; }
+  .welcome-panel { padding:28px; gap:24px; }
+  .welcome-copy h1 { font-size:26px; }
+}
+@media (max-width:800px) {
+  .home { padding:20px 16px; }
+  .welcome-panel { flex-direction:column; padding:24px; margin-bottom:24px; }
+  .welcome-flow { border-left:0; border-top:1px solid #e6ebf2; padding:20px 0 0; min-width:0; }
+  .search { width:100%; }
+  .card-grid { grid-template-columns:1fr; }
+}
 </style>

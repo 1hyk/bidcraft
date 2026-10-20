@@ -66,10 +66,12 @@ GRAY = RGBColor(0x80, 0x80, 0x80)
 #: 留 19cm 给图，剩下的够放段前段后与可能的一行说明。
 MERMAID_MAX_W_CM = 14.0
 MERMAID_MAX_H_CM = 19.0
+# 关系图优先留出上下文空间；照片等普通素材仍使用原来的 19cm 上限。
+MERMAID_PREFERRED_H_CM = 17.0
 
 # 树深度 + 正文内标题级别可能很深（实测正文有 #### ），全量映射会让 300+ 条
 # 深层小节挤进目录页；四级封顶：四～六级统一按四级排版，目录只取 1-3 级。
-MAX_HEAD_LEVEL = docx_style.MAX_HEAD_LEVEL
+MAX_HEAD_LEVEL = 9  # Word 支持九级；不能把正文更深层标题全部压成四级。
 
 # markdown 扩展：tables 管 | 表格，fenced_code 管 ``` 围栏。
 # 不用 sane_lists——它要求列表前必须空行，而正文里「**标题**」紧跟「* 项」是常态。
@@ -253,7 +255,9 @@ def _setup_styles(doc, style: DocxStyle) -> None:
     pf.space_before = Pt(0)
     pf.space_after = Pt(0)
 
-    for lvl, (size, ea, bold, before, after) in enumerate(style.head_specs, start=1):
+    specs = list(style.head_specs)
+    specs.extend([specs[-1]] * (MAX_HEAD_LEVEL - len(specs)))
+    for lvl, (size, ea, bold, before, after) in enumerate(specs, start=1):
         st = doc.styles[f"Heading {lvl}"]
         # 默认模板的标题是主题蓝、且带 *Theme 字体属性，都得压掉
         _font(st, size, ea, ascii_=ea, bold=bold, color=RGBColor(0, 0, 0))
@@ -525,6 +529,37 @@ def _project_images(project_id: int):
         return ProjectImages()
 
 
+def _numbered_title(title: str, level: int, position: int) -> str:
+    """无编号的目录标题按同级顺序补号；已有人工编号原样保留。"""
+    from app.core.chapter_title import normalize
+    compact = re.sub(r"\s+", "", title)
+    if normalize(title) != re.sub(r"[“”‘’\"'「」『』]", "", compact):
+        return title
+
+    def chinese(n):
+        digits = '零一二三四五六七八九'
+        if n < 10:
+            return digits[n]
+        if n < 100:
+            tens, ones = divmod(n, 10)
+            return (digits[tens] if tens > 1 else '') + '十' + (digits[ones] if ones else '')
+        return str(n)
+
+    if level == 1:
+        prefix = chinese(position) + '、'
+    elif level == 2:
+        prefix = '（' + chinese(position) + '）'
+    elif level == 3:
+        prefix = str(position) + '.'
+    elif level == 4:
+        prefix = '（' + str(position) + '）'
+    elif level == 5:
+        prefix = chr(0x2460 + position - 1) if position <= 20 else f'{position}）'
+    else:
+        prefix = (chr(ord('a') + position - 1) if position <= 26 else str(position)) + ')'
+    return prefix + title
+
+
 def _walk_nodes(doc, style: DocxStyle, nodes: list[dict],
                 contents: dict[int, dict], level: int,
                 index: dict | None = None) -> None:
@@ -534,11 +569,13 @@ def _walk_nodes(doc, style: DocxStyle, nodes: list[dict],
     别在递归里按章取子集：去重状态（"这个图名插过没有"）挂在它身上，逐章另取一份
     就等于全书去重失效，同一个图名会在多处各插一张。
     """
+    position = 0
     for node in nodes:
         nid = node.get("id")
         title = (node.get("title") or "").strip()
         if title:
-            heading = doc.add_paragraph(title, style=f"Heading {min(level, MAX_HEAD_LEVEL)}")
+            position += 1
+            heading = doc.add_paragraph(_numbered_title(title, level, position), style=f"Heading {min(level, MAX_HEAD_LEVEL)}")
             start=OxmlElement('w:bookmarkStart'); end=OxmlElement('w:bookmarkEnd')
             bookmark_id=str(1000+len(doc.element.body.xpath('.//w:bookmarkStart')))
             start.set(qn('w:id'),bookmark_id); start.set(qn('w:name'),f'bc_node_{nid}')
@@ -572,6 +609,26 @@ def _render_html(doc, style: DocxStyle, html: str, base_level: int = 1,
         return          # 这条兜底路不过 _walk_block，占位不会被换成图（已知）
     if drop_title:
         _drop_restated_title(root, drop_title)
+        root.set('data-chapter-title', drop_title)
+        # 正文内的小标题同样需要编号；仅在章节导出入口启用，独立渲染保持原行为。
+        headings = [e for e in root.iter() if isinstance(e.tag, str) and re.fullmatch(r'h[1-6]', e.tag.lower())]
+        minimum = min((int(e.tag[1]) for e in headings), default=1)
+        counters = {}
+        for element in headings:
+                depth = int(element.tag[1]) - minimum + 1
+                counters[depth] = counters.get(depth, 0) + 1
+                counters = {k: v for k, v in counters.items() if k <= depth}
+                original = element.text_content().strip()
+                from app.core.chapter_title import _PREFIX_RE
+                clean = original
+                for _ in range(3):
+                    clean = _PREFIX_RE.sub('', clean).strip()
+                numbered = _numbered_title(clean, base_level + depth, counters[depth])
+                # 导出副本统一编号；保留正文原始内容与数据库里的标题。
+                element.clear()
+                element.tag = 'h' + str(min(base_level + depth, 9))
+                element.set('data-export-heading-level', str(min(base_level + depth, 9)))
+                element.text = numbered
     _walk_block(doc, style, root, base_level, images)
 
 
@@ -581,7 +638,8 @@ def _norm_title(s: str) -> str:
 
 def _same_title(a: str, b: str) -> bool:
     """两个标题是不是同一节（用于判断正文首行是否只是复述节点标题）。"""
-    na, nb = _norm_title(a), _norm_title(b)
+    from app.core.chapter_title import normalize
+    na, nb = _norm_title(normalize(a)), _norm_title(normalize(b))
     if not na or not nb:
         return False
     if na == nb:
@@ -615,18 +673,90 @@ def _walk_block(doc, style: DocxStyle, parent, base_level: int,
 
     `images`：本章「图名 → 文件」索引，一路透传给 `_add_inline`（换掉 `[图片占位：X]`）。
     """
+    # 图题是图片的附属段落，不按普通正文缩进排版。仅处理紧邻图片的明确图题，
+    # 不把正文中“图：……”的普通说明误搬到别处。
+    claimed_captions = set()
+    for figure in list(parent):
+        if not isinstance(figure.tag, str):
+            continue
+        tag = figure.tag.lower()
+        is_figure = (tag == 'img' or
+                     (tag == 'pre' and _mermaid_code(figure) is not None) or
+                     (tag == 'div' and 'mermaid-block' in (figure.get('class') or '')) or
+                     (tag == 'p' and len(figure) == 1 and figure[0].tag == 'img'
+                      and not figure.text_content().strip()))
+        if not is_figure:
+            continue
+        found_caption = False
+        for candidate in (figure.getprevious(), figure.getnext()):
+            if candidate is None or candidate.tag != 'p' or candidate in claimed_captions:
+                continue
+            match = re.fullmatch(r'图\s*[：:]\s*(\S[^\n]{0,150})', candidate.text_content().strip())
+            if not match and candidate.get('data-figure-caption') != 'true':
+                continue
+            caption_text = match.group(1).strip() if match else candidate.text_content().strip()
+            candidate.clear()
+            candidate.text = caption_text
+            candidate.set('data-figure-caption', 'true')
+            figure.addnext(candidate)
+            claimed_captions.add(candidate)
+            found_caption = True
+            break
+        if not found_caption and (tag == 'pre' or tag == 'div'):
+            # 老正文未带图名：只从现有标题取主题，不编造项目事实、不调用模型。
+            from app.core.chapter_title import normalize
+            from lxml.html import Element
+            topic = parent.get('data-chapter-title') or ''
+            for preceding in parent.iter():
+                if preceding is figure:
+                    break
+                if isinstance(preceding.tag, str) and re.fullmatch(r'h[1-9]', preceding.tag.lower()):
+                    topic = preceding.text_content().strip()
+            topic = re.sub(r'^[①-⑳]|^[a-z]\)', '', normalize(topic)).strip() or '方案'
+            code = _mermaid_code(figure) if tag == 'pre' else figure.get('data-code') or figure.text or ''
+            kind = next((label for pattern, label in [
+                (r'\bgantt\b', '进度计划图'), (r'\bsequenceDiagram\b', '时序图'),
+                (r'\bmindmap\b', '思维导图'), (r'\bclassDiagram\b', '类关系图'),
+                (r'\berDiagram\b', '实体关系图'), (r'\bstateDiagram', '状态转换图'),
+            ] if re.search(pattern, code or '')), '流程图')
+            caption = Element('p')
+            caption.set('data-figure-caption', 'true')
+            stem = kind[:-1]
+            caption.text = topic if topic.endswith('图') else topic + ('图' if topic.endswith(stem) else kind)
+            figure.addnext(caption)
+            claimed_captions.add(caption)
     for el in parent:
         if not isinstance(el.tag, str):      # 注释等非元素节点
             continue
         tag = el.tag.lower()
 
-        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            lvl = min(base_level + int(tag[1]) - 1, MAX_HEAD_LEVEL)
+        if re.fullmatch(r'h[1-9]', tag):
+            lvl = int(el.get('data-export-heading-level')) if el.get('data-export-heading-level') else min(base_level + int(tag[1]) - 1, MAX_HEAD_LEVEL)
             p = doc.add_paragraph(style=f"Heading {lvl}")
             _add_inline(p, style, el, images=images)
 
         elif tag == "p":
-            _add_inline(_para(doc, style, indent=True), style, el, images=images)
+            marker = _PLACEHOLDER_RE.fullmatch(el.text_content().strip()) if images is not None else None
+            name, path = _lookup_name(marker.group(1), images) if marker else ('', None)
+            if path is not None:
+                # 独占段落的历史图片使用图下独立居中题注；不改段内混排的上下文。
+                p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
+                p.paragraph_format.first_line_indent = Cm(0)
+                try:
+                    p.add_run().add_picture(str(path), width=Cm(_fit_width_cm(path, style)))
+                    caption = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
+                    caption.paragraph_format.first_line_indent = Cm(0)
+                    caption.paragraph_format.line_spacing = 1.0
+                    _font(caption.add_run(name), style.table_size_pt, style.body_font, color=GRAY)
+                except Exception:
+                    _run(p, '[图片占位：'+name+']', False, False, True)
+            elif el.get('data-figure-caption') == 'true':
+                p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.line_spacing = 1.0
+                _font(p.add_run(el.text_content()), style.table_size_pt, style.body_font, color=GRAY)
+            else:
+                _add_inline(_para(doc, style, indent=True), style, el, images=images)
 
         elif tag in ("ul", "ol"):
             _render_list(doc, style, el, images=images)
@@ -770,16 +900,17 @@ def _add_text(paragraph, style: DocxStyle, text: str, bold: bool, italic: bool, 
         if m.start() > pos:
             _run(paragraph, text[pos:m.start()], bold, italic, red, collapse=collapse)
         name, path = _lookup_name(m.group(1), images)
+        visible_name = re.split(r"\|\s*素材ID", m.group(1), maxsplit=1)[0].strip()
         if path is None:
-            _run(paragraph, m.group(0), bold, italic, red=True, collapse=collapse)
+            _run(paragraph, f"[图片占位：{visible_name}]", bold, italic, red=True, collapse=collapse)
             _font(paragraph.add_run(f"（{_pending_kind(_lookup_raw(m.group(1)))}）"),
                   style.table_size_pt, style.body_font, color=GRAY)
         else:
             try:
-                paragraph.add_run().add_picture(str(path), width=Cm(_fit_width_cm(path)))
+                paragraph.add_run().add_picture(str(path), width=Cm(_fit_width_cm(path, style)))
                 _font(paragraph.add_run(name), style.table_size_pt, style.body_font, color=GRAY)
             except Exception:  # noqa: BLE001 图片损坏/格式不认，退回红字占位而不是丢图
-                _run(paragraph, m.group(0), bold, italic, red=True, collapse=collapse)
+                _run(paragraph, f"[图片占位：{visible_name}]", bold, italic, red=True, collapse=collapse)
                 _font(paragraph.add_run(f"（{_pending_kind(_lookup_raw(m.group(1)))}）"),
                       style.table_size_pt, style.body_font, color=GRAY)
         pos = m.end()
@@ -927,7 +1058,9 @@ def _warm_mermaid(contents: dict[int, dict]) -> None:
         return
     try:
         from app.services import mermaid_render
+        from app.services.mermaid_source import split_mindmap
 
+        sources=[piece for source in sources for piece in split_mindmap(source)]
         got = len(mermaid_render.render_batch(sources))
         print(f"[导出] Mermaid 图 {got}/{len(set(s.strip() for s in sources))} 张就绪")
     except Exception as e:  # noqa: BLE001 预热失败无所谓，遍历时会按需渲
@@ -1038,6 +1171,14 @@ def _render_mermaid(doc, style: DocxStyle, code: str) -> None:
     """
     if not code or not code.strip():
         return
+    from app.services.mermaid_source import split_mindmap
+    pieces=split_mindmap(code)
+    if len(pieces)>1:
+        for number,piece in enumerate(pieces,1):
+            p=_para(doc,style,align=WD_ALIGN_PARAGRAPH.CENTER)
+            _font(p.add_run(f'关系图分图 {number}/{len(pieces)}'),style.table_size_pt,style.body_font,color=GRAY)
+            _render_mermaid(doc,style,piece)
+        return
     path = None
     try:
         from app.services import mermaid_render
@@ -1048,34 +1189,50 @@ def _render_mermaid(doc, style: DocxStyle, code: str) -> None:
     if path is not None:
         try:
             p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
-            p.add_run().add_picture(str(path), width=Cm(_mermaid_width_cm(path)))
+            # 图是一个内联对象，不能继承正文的 1.5/2 倍行距扩大所在行。
+            p.paragraph_format.line_spacing = 1.0
+            p.paragraph_format.space_after = Pt(4)
+            p.add_run().add_picture(str(path), width=Cm(_mermaid_width_cm(path, style)))
             return
         except Exception:  # noqa: BLE001 图片损坏不该让整篇导出失败
             pass
     _mermaid_placeholder(doc, style, code)
 
 
-def _fit_width_cm(path: Path) -> float:
+def _fit_width_cm(path: Path, style: DocxStyle | None = None) -> float:
     """按纵横比把图宽缩到 MERMAID_MAX_H_CM 之内（读不出尺寸就按满宽，不因它失败）。
 
     上限这套常量是给 mermaid 定的，但量的是"正文栏能放多宽多高的图"，与图从哪来无关
     ——导出时插的历史插图同样用它卡高度，免得一张竖长图顶穿一页。
     """
+    max_w, max_h = MERMAID_MAX_W_CM, MERMAID_MAX_H_CM
+    if style is not None:
+        max_w = min(max_w, docx_style.PAGE_W_CM - style.margin_left_cm - style.margin_right_cm)
+        # 为图注、段落基线留出余量；不把边距较大的页面仍当作默认正文栏。
+        max_h = min(max_h, docx_style.PAGE_H_CM - style.margin_top_cm - style.margin_bottom_cm - 1.5)
     try:
         from PIL import Image
 
         with Image.open(path) as im:
             w, h = im.size
-        if w > 0 and h / w * MERMAID_MAX_W_CM > MERMAID_MAX_H_CM:
-            return round(MERMAID_MAX_H_CM * w / h, 2)
+        if w > 0 and h > 0:
+            return min(max_w, max_h * w / h)
     except Exception:  # noqa: BLE001
         pass
-    return MERMAID_MAX_W_CM
+    return max_w
 
 
-def _mermaid_width_cm(path: Path) -> float:
+def _mermaid_width_cm(path: Path, style: DocxStyle | None = None) -> float:
     """（保留旧名）——`tests/verify_mermaid_export.py` 断言的就是这个名字。"""
-    return _fit_width_cm(path)
+    width = _fit_width_cm(path, style)
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            if im.height > 0:
+                width = min(width, MERMAID_PREFERRED_H_CM * im.width / im.height)
+    except Exception:
+        pass
+    return width
 
 
 def _mermaid_placeholder(doc, style: DocxStyle, code: str) -> None:
@@ -1096,7 +1253,7 @@ def _add_image(container, paragraph, el, style: DocxStyle) -> None:
               style.table_size_pt, style.body_font, color=WARN_RED)
         return
     try:
-        target.add_run().add_picture(str(path), width=Cm(14))
+        target.add_run().add_picture(str(path), width=Cm(_fit_width_cm(path, style)))
         alt = (el.get("alt") or "").strip()
         if alt:
             cap = (_para(container, style, align=WD_ALIGN_PARAGRAPH.CENTER)

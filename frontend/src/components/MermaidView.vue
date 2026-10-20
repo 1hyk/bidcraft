@@ -24,6 +24,8 @@
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 import { nodeViewProps, NodeViewWrapper } from '@tiptap/vue-3'
+import themeVariables from '../mermaidTheme.json'
+import { splitMindmap } from '../mermaidLayout'
 
 const props = defineProps(nodeViewProps)
 const svg = ref('')
@@ -47,8 +49,15 @@ async function render(code) {
   try {
     // 动态引入：mermaid 体积大，按需加载不拖慢首屏
     const { default: mermaid } = await import('mermaid')
-    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict' })
-    const { svg: out } = await mermaid.render(`mm-${Date.now()}-${seq}`, code)
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict', suppressErrorRendering: true,
+      flowchart: { htmlLabels: false, nodeSpacing: 25, rankSpacing: 20, padding: 8 }, themeVariables })
+    const pieces = splitMindmap(code)
+    const rendered = []
+    for (let i = 0; i < pieces.length; i++) {
+      const { svg: part } = await mermaid.render(`mm-${Date.now()}-${seq}-${i}`, pieces[i])
+      rendered.push((pieces.length > 1 ? `<p class="mm-part">关系图分图 ${i + 1}/${pieces.length}</p>` : '') + part)
+    }
+    const out = rendered.join('')
     if (seq === renderSeq) {
       svg.value = out
       error.value = ''

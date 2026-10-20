@@ -4,7 +4,7 @@
     <header class="page-head">
       <div class="head-left">
         <h1 class="page-title">知识库</h1>
-        <span class="page-sub">历史标书 · 工艺工法，两类知识分离管理</span>
+        <span class="page-sub">历史标书参考素材，按应用行业管理</span>
       </div>
       <div class="head-tools">
         <el-select v-model="domain" class="domain-filter" @change="load">
@@ -239,7 +239,6 @@ const genre = computed(() => genreOf(domains.value, domain.value || defaultDomai
 
 const TABS = [
   { key: 'sod', label: '历史标书库' },
-  { key: 'method', label: '工艺工法库' },
 ]
 const STATUS_MAP = { pending: '待解析', parsing: '解析中', parsed: '已解析', failed: '解析失败' }
 
@@ -353,7 +352,7 @@ function proofread(row) {
 // 从 URL ?tab= 恢复激活库（返回按钮带参 / 手动刷新保持）
 function applyTabQuery() {
   const t = route.query.tab
-  if (t === 'sod' || t === 'method') activeTab.value = t
+  if (t === 'sod') activeTab.value = t
 }
 watch(() => route.query.tab, applyTabQuery)
 async function removeDoc(row) {

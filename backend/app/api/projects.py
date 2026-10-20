@@ -47,7 +47,15 @@ def list_projects(keyword: str = ""):
         by_proj: dict = {}
         for l in lot_rows:
             by_proj.setdefault(l["project_id"], []).append(l)
+        file_rows = query(
+            f"SELECT project_id, COUNT(*) AS total, SUM(status='parsed') AS parsed "
+            f"FROM project_file WHERE category='tender' AND project_id IN ({marks}) GROUP BY project_id"
+        )
+        files_by_project = {row['project_id']: row for row in file_rows}
         for p in projects:
+            files = files_by_project.get(p['id'], {})
+            p['has_tender'] = bool(files.get('total'))
+            p['has_parsed_tender'] = bool(files.get('parsed'))
             lots = by_proj.get(p["id"]) or []
             p["lots"] = [
                 {"lot_code": l["lot_code"], "lot_name": l["lot_name"], "selected": bool(l["selected"])}

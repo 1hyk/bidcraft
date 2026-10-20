@@ -3,6 +3,12 @@ import re
 
 
 def normalize(source: str) -> str:
+    if re.match(r'^\s*gantt\b',source):
+        # 已声明任务被用作里程碑起点时，补齐明确的 after 引用；不改日期或工期。
+        ids=set(re.findall(r':\s*(?:active\s*,\s*|crit\s*,\s*|done\s*,\s*)*([A-Za-z_]\w*)\s*,',source))
+        def milestone(match):
+            return match[1]+'after '+match[2]+match[3] if match[2] in ids else match[0]
+        return re.sub(r'(:\s*milestone\s*,\s*)([A-Za-z_]\w*)(\s*,\s*0d\b)',milestone,source)
     if not re.match(r'^\s*sequenceDiagram\b', source):
         return source
     declarations = re.findall(r'^\s*(?:participant|actor)\s+(\w+)\b', source, re.M)
@@ -36,6 +42,36 @@ def normalize(source: str) -> str:
     return ''.join(lines)
 
 
+def split_mindmap(source: str, limit: int = 14) -> list[str]:
+    """仅拆分可确定解析的缩进树，整支搬运；未知语法、单支过大均保持原样。"""
+    lines=source.strip().splitlines()
+    if not lines or lines[0].strip()!='mindmap': return [source]
+    nodes=[line for line in lines[1:] if line.strip()]
+    if len(nodes)<=limit or any('\t' in line or re.search(r'::|^\s*%%|^\s*icon\b',line) for line in nodes):
+        return [source]
+    indent=lambda line:len(line)-len(line.lstrip(' '))
+    root=nodes[0]
+    if any(indent(line)<=indent(root) for line in nodes[1:]):return [source]
+    branch_depth=min(indent(line) for line in nodes[1:])
+    branches=[]
+    for line in nodes[1:]:
+        if indent(line)==branch_depth:branches.append([])
+        if not branches:return [source]
+        branches[-1].append(line)
+    if any(len(branch)+1>limit for branch in branches):return [source]
+    groups=[];group=[]
+    for branch in branches:
+        if group and len(group)+len(branch)+1>limit:
+            groups.append(group);group=[]
+        group.extend(branch)
+    if group:groups.append(group)
+    return ['mindmap\n'+root+'\n'+'\n'.join(group)+'\n' for group in groups]
+
+
 def normalize_body(body: str) -> str:
+    def replace(match):
+        chunks=split_mindmap(normalize(match[2]))
+        if len(chunks)==1:return match[1]+chunks[0]+match[3]
+        return '\n\n'.join(f'（关系图分图 {i+1}/{len(chunks)}）\n\n```mermaid\n{code}```' for i,code in enumerate(chunks))
     return re.sub(r'(```mermaid[^\n]*\n)(.*?)(```)',
-                  lambda m: m[1] + normalize(m[2]) + m[3], body, flags=re.S)
+                  replace, body, flags=re.S)

@@ -59,8 +59,9 @@ def section_1() -> None:
     # 「工程类型」也是领域词表——原先是前端写死的 ['铁路','公路','房建','市政','水利']，
     # 加了低空领域之后那几个选项里根本没有低空（新建低空项目时一个类型都点不了）。
     types = {d["key"]: d["project_types"] for d in list_domains()}
-    check("list_domains 带出 project_types", set(types), {"lowalt", "softtest"})
-    check("lowalt 的工程类型", types["lowalt"], ["低空", "无人机"])
+    check("list_domains 带出全部注册领域的 project_types", set(types), set(DOMAINS))
+    check("lowalt 的业务服务类型", types["lowalt"],
+          ["飞行测试验证", "软件测试", "平台软件开发", "系统集成与部署", "运维与技术保障", "综合服务"])
     check("工程类型里不含别的领域的词",
           [t for v in types.values() for t in v
            if t in ("铁路", "公路", "房建", "市政", "水利")], [])

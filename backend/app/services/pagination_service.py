@@ -26,7 +26,7 @@ def snapshot(project_id):
                      'body':data.get('body') or '', 'format':data.get('format') or 'md'})
     style = get_project_style(project_id).to_dict()
     project=query_one('SELECT name FROM project WHERE id=%s',(project_id,)) or {}
-    fingerprint = hashlib.sha256(json.dumps({'layout_version':2,'style':style,'body':body,'project':project},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({'layout_version':12,'style':style,'body':body,'project':project},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {'signature':fingerprint,'style':style,'words':sum(content_words(x) for x in body),
             'complete':bool(body) and all(x['body'].strip() for x in body)}
 

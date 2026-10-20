@@ -73,6 +73,7 @@ def _stub_all() -> dict:
     from app.core import domains
     from app.services import compile_service, experience_service, lot_profile_service
     from app.services import matching, section_service
+    from app.services import compilation_requirements
 
     rec = {
         "titles": 0, "skeleton_for_titles": None, "children": [], "children_skeletons": [],
@@ -95,13 +96,16 @@ def _stub_all() -> dict:
         rec["children_skeletons"].append(skeleton)
         return [{"title": s} for s in SECTIONS[title]]
 
-    def outline(chapter_title, chapter_type, project_facts, knowledge_pages, experiences, lot_brief):
+    def outline(chapter_title, chapter_type, project_facts, knowledge_pages, experiences, lot_brief, **kwargs):
         rec["outlines"].append(chapter_title)
         return {"chapter_title": chapter_title, "thinking": f"{chapter_title} 的写法"}
 
     _swap(oa, "generate_toc_titles", titles)
     _swap(oa, "generate_toc_children", children)
     _swap(cg, "generate_outline", outline)
+    _swap(compilation_requirements, "load_requirements", lambda pid: [])
+    # 此夹具验证全书模式；指定范围的三层目录由 verify_generation_scope 覆盖。
+    _swap(cg.settings, "generation_root_title", "")
 
     _swap(domains, "domain_of_project", lambda pid: DOMAIN)
     _swap(matching, "load_page_summaries", lambda *a, **k: [{"id": 1, "title": "样式语料"}])
@@ -119,6 +123,7 @@ def _stub_all() -> dict:
 
     def save_outline(pid, title, o):
         rec["outlines_saved"].append(title)
+        return True
 
     def update_progress(pid, *, total=None, progress=None):
         if total is not None:
@@ -129,6 +134,10 @@ def _stub_all() -> dict:
 
     _swap(section_service, "clear_tree", clear_tree)
     _swap(section_service, "save_tree", save_tree)
+    def replace_tree(pid, chs):
+        clear_tree(pid)
+        return save_tree(pid, chs)
+    _swap(section_service, "replace_tree", replace_tree)
     _swap(section_service, "save_outline", save_outline)
     _swap(compile_service, "update_progress", update_progress)
     _swap(compile_service, "save_partial_toc", save_partial_toc)

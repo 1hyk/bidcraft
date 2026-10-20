@@ -1,10 +1,10 @@
 <template>
   <el-drawer :model-value="modelValue" @update:model-value="$emit('update:modelValue',$event)" title="从公司资料补全待补项" size="80%" :close-on-click-modal="false">
-    <p>先保存当前编辑，再查找已核实的公司事实。核对来源后选择应用；人员任命、投入和服务承诺须另行确认。</p>
+    <p>这里只处理可由公司事实补入的待补项，不是全部问题的修复入口。核对来源后选择应用；本次人员投入或承诺需确定，非必要细节可以回正文改写。</p>
     <el-select v-model="node" filterable placeholder="选择有正文的章节" style="width:65%" @change="result={items:[]};selection=[]"><el-option v-for="c in chapters" :key="c.id" :value="c.id" :label="c.title" /></el-select>
     <el-button :disabled="!node || busy" :loading="searching" @click="search">查找补全建议</el-button>
     <el-alert v-if="result.truncated" type="warning" title="本章待补项超过80处，本次只处理前80处，处理后可再次查找" :closable="false" />
-    <el-table :data="result.items || []" @selection-change="selection=$event" row-key="start" empty-text="选择章节后查找建议；公司资料可在首页上传并核实">
+    <el-table :data="result.items || []" @selection-change="selection=$event" row-key="start" empty-text="选择章节后查找建议；缺少公司事实可返回检查面板管理公司资料">
       <el-table-column type="selection" :selectable="r=>r.status==='suggested' && !busy" />
       <el-table-column prop="placeholder" label="待补项" min-width="160" />
       <el-table-column label="建议与理由" min-width="220"><template #default="{row}"><p>{{ row.replacement || '仍需处理' }}</p><small>{{ row.message }}</small></template></el-table-column>

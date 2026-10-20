@@ -6,7 +6,7 @@
 """
 import json
 
-from app.core.database import execute, query
+from app.core.database import execute, query, query_one
 
 
 def replace_requirements(project_id: int, source_file: str, reqs: list[dict]) -> int:
@@ -208,7 +208,7 @@ def requirements_for_chapter_text(project_id: int, title: str, limit: int = 8) -
 def requirements_text(project_id: int, limit: int = 30) -> str:
     """编排注入用文本：已确认优先、pending 其次，ignored 不入。每条含建议章节。"""
     rows = query(
-        "SELECT category, title, weight, suggested_chapter, status, applicable_lots"
+        "SELECT category, title, content, source_file, source_location, weight, suggested_chapter, status, applicable_lots"
         " FROM tender_requirement"
         " WHERE project_id = %s AND status != 'ignored'"
         " ORDER BY FIELD(status, 'confirmed', 'pending'), category, id",
@@ -219,5 +219,7 @@ def requirements_text(project_id: int, limit: int = 30) -> str:
     for r in rows:
         w = f"（{r['weight']:g} 分）" if r.get("weight") is not None else ""
         ch = f" → 建议章节：{r['suggested_chapter']}" if r.get("suggested_chapter") else ""
-        lines.append(f"- [{r['category']}]{w} {r['title']}{ch}")
+        lines.append(f"- [{r['category']}]{w} {r['title']}{ch}"
+                     f"\n  来源：{r.get('source_file') or ''} {r.get('source_location') or ''}"
+                     f"\n  原文要求：{r.get('content') or ''}")
     return "\n".join(lines)

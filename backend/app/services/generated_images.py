@@ -16,8 +16,7 @@ _locks: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
 _slots = threading.BoundedSemaphore(max(1, settings.image_generation_concurrency))
 _EVIDENCE = re.compile(r"现场照片|实拍|真实照片|截图|界面|扫描件|证照|证书|资质|检测报告|检测证明|实测|签字|盖章")
-_RELATION = re.compile(r"流程图|架构图|组织架构|组织图|时序图|甘特图|横道图|进度计划|思维导图|关系图|逻辑图")
-_TABLE = re.compile(r'矩阵|对照表|参数表|指标表|追溯表|清单表')
+from app.services.image_planning import RELATION as _RELATION, TABLE as _TABLE
 
 
 class ImageGenerationError(RuntimeError):
@@ -61,7 +60,7 @@ def _request_image(prompt: str) -> bytes:
     payload = {"model": settings.image_generation_model,
                "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
                "parameters": {"size": settings.image_generation_size, "n": 1,
-                              "prompt_extend": False, "watermark": True}}
+                              "prompt_extend": False, "watermark": False}}
     # 付费提交不自动重试，避免网络超时后重复提交、重复计费。
     try:
         with _client(timeout=settings.image_generation_timeout) as client:
@@ -118,6 +117,29 @@ def catalog(project_id: int) -> list[dict]:
     return out
 
 
+def validate_visual(path: Path, need: dict) -> None:
+    """看实际像素核对主题与文字；失败保留待补，不能只因接口成功就插图。"""
+    import base64
+    from app.services.llm import llm
+    from app.agents.json_util import extract_json
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert('RGB')
+        im.thumbnail((1280, 1280))
+        buf = io.BytesIO()
+        im.save(buf, format='JPEG', quality=90)
+    result = extract_json(llm.chat([{'role':'user','content':[
+        {'type':'text','text':'核查这张生成概念插图是否准确表现下述场景，不接受仅色调相似。'
+         '同时检查有无任何可见文字、乱码、字母标签或水印。只输出JSON：'
+         '{"relevant":true,"has_text":false,"reason":""}。需求：'
+         +str(need.get('name') or '')+'；'+str(need.get('purpose') or '')},
+        {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+
+         base64.b64encode(buf.getvalue()).decode()}}]}], model=settings.vision_model,
+         temperature=0, max_tokens=500, timeout=60))
+    if result.get('relevant') is not True or result.get('has_text') is not False:
+        raise ImageGenerationError('生成图未通过主题/文字核验：'+str(result.get('reason') or '需重新检查')[:150])
+
+
 def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
     from PIL import Image
     from app.services.image_retrieval import image_identity
@@ -127,15 +149,22 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
     if not eligible(need):
         raise ImageGenerationError("此配图需要真实材料或应由 Mermaid 绘制")
     caption = str(need["name"]).strip()
+    visual_prompt = (str(need.get('prompt') or '')+'。'+str(need.get('purpose') or ''))[:1000]
+    visual_prompt = re.sub(r"[^，,。；\n]*(?:标注|文字|标签|水印|logo)[^，,。；\n]*(?:[，,。；\n]|$)",
+                           "", visual_prompt, flags=re.I).strip()
+    # 引号包裹的链路名等常被模型直接写进图；去掉这种标签指令，保留独立场景描述。
+    visual_prompt = re.sub(r'[^，,。；\n]*[‘“][^’”]+[’”][^，,。；\n]*(?:[，,。；\n]|$)',
+                           '',visual_prompt).strip()
     prompt = (
         'One clean conceptual illustration, white background, blue-gray objects, horizontal composition. '
         'Only depict visible objects and spatial arrangements, not a presentation slide or an infographic. '
-        + str(need.get('prompt') or need.get('purpose') or 'A generic workspace concept')[:600]
+        + (visual_prompt or ('Visual subject only, do not print these words: '+caption))
         + '\nOnly the illustration itself. No writing, no title, no subtitles, no paragraphs, no tables, '
         'no letters, no numbers, no charts, no diagrams, no labels, no logos, no real certificates or signatures. '
         'This is a proposed concept, never a photograph or evidence of an existing facility.'
     )
     version = json.dumps({"model": settings.image_generation_model, "size": settings.image_generation_size,
+                          "validation_version": 1,
                           "endpoint": _connection()[0], "prompt": prompt, "caption": caption,
                           "context": body[:1800]}, ensure_ascii=False, sort_keys=True)
     cache_key = hashlib.sha256(version.encode()).hexdigest()
@@ -147,8 +176,12 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
         if path.is_file() and manifest.is_file():
             try:
                 record = json.loads(manifest.read_text(encoding="utf-8"))
+                if record.get('rejected'):
+                    raise ImageGenerationError(record.get('reason') or '该生成图未通过核验，未重复付费提交')
                 if record.get("asset_id") == image_identity(path):
                     return record
+            except ImageGenerationError:
+                raise
             except Exception:
                 pass
         with _slots:
@@ -166,7 +199,15 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
                 temp.replace(path)
         except Exception as exc:
             raise ImageGenerationError(f"生成结果不是有效图片（{type(exc).__name__}）") from None
+        try:
+            validate_visual(path, need)
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, ImageGenerationError) else '生成图视觉核验暂不可用，需人工检查'
+            manifest.write_text(json.dumps({'project_id':int(project_id), 'rejected':True,
+                                           'reason':reason},ensure_ascii=False),encoding='utf-8')
+            raise ImageGenerationError(reason) from None
         record = {"project_id": int(project_id), "node_id": int(node_id), "asset_id": image_identity(path),
+                  "validated": True,
                   "caption": caption + "（AI生成示意）", "kind": "illustration", "generated": True,
                   "url": "/uploads/" + path.relative_to(settings.uploads_dir).as_posix(),
                   "content": str(need.get("purpose") or "概念示意插图"),

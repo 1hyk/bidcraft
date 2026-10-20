@@ -2,14 +2,9 @@
   <aside class="global-nav">
     <!-- 品牌 -->
     <div class="nav-brand">
-      <div class="brand-mark">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
       <div class="brand-text">
-        <span class="brand-name">标书匠 BidCraft</span>
-        <span class="brand-sub">技术方案编制工作台</span>
+        <img class="brand-logo" src="/brand/jiachi-logo.png" alt="嘉驰国际 X-GIANTS" />
+        <span class="brand-sub">嘉驰科技咨询 · 技术方案工作台</span>
       </div>
     </div>
 
@@ -29,7 +24,7 @@
 
     <!-- 底部占位 -->
     <div class="nav-footer">
-      <span class="nav-ver num">v0.1 · MVP</span>
+      <span class="nav-ver">嘉驰 · 内部工作空间</span>
     </div>
   </aside>
 </template>
@@ -40,21 +35,16 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 
 const NAV = [
-  {path:'/company',label:'本公司资料',icon:'▤'},
   {
     path: '/',
-    label: '首页',
+    label: '项目工作台',
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
   },
+  {path:'/company',label:'公司资料',icon:'▤'},
   {
     path: '/knowledge',
     label: '历史参考素材',
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>',
-  },
-  {
-    path: '/experience',
-    label: '经验库',
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 8.7l5.4-.8z"/></svg>',
   },
 ]
 
@@ -97,4 +87,16 @@ function isActive(path) {
 
 .nav-footer { padding: 14px 16px; border-top: 1px solid var(--ink-line); }
 .nav-ver { font-size: 10px; color: var(--ink-text-3); }
+.global-nav { width:216px; background:#fff; border-right:1px solid #e2e8f0; }
+.nav-brand { padding:30px 24px 26px; min-height:102px; border-color:#edf0f5; }
+.brand-name { font-size:20px; color:#18385e; letter-spacing:.04em; }
+.brand-logo { display:block; width:168px; height:32px; object-fit:contain; object-position:left center; }
+.brand-sub { font-size:11px; color:#8794a7; margin-top:8px; letter-spacing:.04em; }
+.nav-list { padding:24px 14px; gap:8px; }
+.nav-item { padding:13px 16px; color:#69788d; border-radius:9px; }
+.nav-item:hover { background:#f3f6fa; color:#284b7d; }
+.nav-item.active { background:#eaf1fc; color:#2f5fd0; }
+.nav-footer { border-color:#edf0f5; padding:20px 24px; }
+.nav-ver { color:#93a0b1; }
+@media(max-width:800px) { .global-nav { width:164px; } .nav-brand { padding:26px 16px; } .brand-logo { width:132px; height:28px; } .brand-sub { font-size:9px; } .nav-item { padding:12px 10px; } }
 </style>

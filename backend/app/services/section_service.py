@@ -97,6 +97,23 @@ def save_tree(project_id: int, chapters: list[dict], lot_id: int | None = None) 
     return 0
 
 
+def replace_tree(project_id: int, chapters: list[dict], lot_id: int | None = None) -> int:
+    """目录和正文的旧数据与新目录在同一事务中切换；写入失败则回滚。"""
+    from app.core.database import get_conn
+    conn = get_conn()
+    conn.begin()
+    try:
+        clear_tree(project_id)
+        count = save_tree(project_id, chapters, lot_id)
+        if not count:
+            raise ValueError('新目录没有写入节点')
+        conn.commit()
+        return count
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 def _insert_nodes(project_id: int, chapters: list[dict], parent_id: int | None, lot_id: int | None) -> int:
     count = 0
     for idx, ch in enumerate(chapters):
@@ -126,7 +143,25 @@ def save_outline(project_id: int, title: str, outline: dict) -> bool:
     """
     if not title:
         return False
-    node = find_node_by_title(project_id, title)
+    node = None
+    if "_path" in outline:
+        rows = query("SELECT id,title,parent_id FROM chapter_node WHERE project_id=%s", (project_id,))
+        by_id = {r["id"]: r for r in rows}
+        def path_of(r):
+            path, seen = [], {r["id"]}
+            parent = r.get("parent_id")
+            while parent in by_id:
+                if parent in seen:
+                    raise ValueError("目录存在循环父子关系")
+                seen.add(parent)
+                path.insert(0, by_id[parent]["title"])
+                parent = by_id[parent].get("parent_id")
+            return path
+        matches = [r for r in rows if r["title"] == title and path_of(r) == outline["_path"]]
+        if len(matches) == 1:
+            node = matches[0]
+    else:
+        node = find_node_by_title(project_id, title)
     if not node:
         return False
     execute(

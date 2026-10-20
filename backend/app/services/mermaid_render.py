@@ -56,15 +56,19 @@ _MAX_H = 1100
 _BATCH = 6
 
 #: 分隔带厚度（CSS px）与颜色。**必须是 mermaid 画不出来的颜色**：
-#: neutral 主题全是灰蓝，洋红只可能是我们自己画的带子，切图时不会误判。
+#: 默认主题不使用纯洋红；该颜色仅用于分隔带。
 _BAND = 6
 _SEP_RGB = (255, 0, 255)
 
 #: 设备像素倍率。Word 里正文栏宽 14cm ≈ 1654 设备像素，2x 截图刚好不糊。
 _SCALE = 2
 
-#: `neutral` 与前端 `MermaidView.vue` 用的一致——**导出件要和编辑器里看到的一样**。
-_THEME = "neutral"
+#: 与前端 `MermaidView.vue` 保持同一彩色主题，主题参与缓存键。
+_THEME = "default"
+
+# 保留节点与连线，只压缩默认空隙；前端使用相同参数。
+_FLOWCHART = {"htmlLabels": False, "nodeSpacing": 25, "rankSpacing": 20, "padding": 8}
+_THEME_VARIABLES = json.loads((PROJECT_ROOT/'frontend/src/mermaidTheme.json').read_text(encoding='utf-8'))
 
 #: 图内字体。必须写死：不写就跟随 Chrome 默认，中文字宽一变几何全变，
 #: 而且不同机器出的图尺寸不一致，缓存就失去意义。
@@ -105,7 +109,7 @@ var MAXW = __MAX_W__, MAXH = __MAX_H__;
 function failAt(i) { var g = document.getElementById('d' + i); if (g) g.innerHTML = ''; }
 try {
   mermaid.initialize({startOnLoad: false, theme: '__THEME__', securityLevel: 'strict',
-                      fontFamily: '__FONT__', flowchart: {htmlLabels: false}});
+                      fontFamily: '__FONT__', flowchart: __FLOWCHART__, themeVariables: __THEME_VARIABLES__});
   // 一串 promise **顺序**渲：页内渲染只要零点几秒，并发反而可能互相踩 DOM（不值得赌）
   var chain = Promise.resolve(), jobs = [];
   SRC.forEach(function (s, i) {
@@ -167,7 +171,7 @@ def available() -> bool:
 def _cache_path(src: str) -> Path:
     """源码 → 缓存文件路径。key 里带上主题/倍率/字体，改这些参数会自动失效重渲。"""
     digest = hashlib.sha1(
-        f"{_THEME}|{_SCALE}|{_FONT}|{src}".encode("utf-8")
+        f"{_THEME}|{_SCALE}|{_FONT}|{json.dumps(_FLOWCHART, sort_keys=True)}|{json.dumps(_THEME_VARIABLES, sort_keys=True)}|{src}".encode("utf-8")
     ).hexdigest()[:16]
     return settings.uploads_dir / "mermaid" / datetime.now().strftime("%Y%m") / f"{digest}.png"
 
@@ -309,6 +313,8 @@ def _page(chunk: list[str]) -> str:
         .replace("__SRC__", payload)
         .replace("__THEME__", _THEME)
         .replace("__FONT__", _FONT)
+        .replace("__FLOWCHART__", json.dumps(_FLOWCHART))
+        .replace("__THEME_VARIABLES__", json.dumps(_THEME_VARIABLES))
         .replace("__MAX_W__", str(_MAX_W))
         .replace("__MAX_H__", str(_MAX_H))
     )

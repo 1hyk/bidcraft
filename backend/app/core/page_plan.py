@@ -261,8 +261,11 @@ def allocate(nodes: list[dict], total_chars: int | None) -> dict[int, int]:
     out: dict[int, int] = {}
     fixed = 0
     rest: list[tuple[int, float]] = []
+    intros = sum(bool(n.get("intro_words")) and not n.get("override") for n in nodes)
     for n in nodes:
         ov = n.get("override")
+        if not ov and n.get("intro_words"):
+            ov = min(n["intro_words"], max(1, int(total_chars * .1 / max(intros, 1))))
         if ov:
             out[n["id"]] = int(ov)
             fixed += int(ov)

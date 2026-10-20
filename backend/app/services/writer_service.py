@@ -61,7 +61,8 @@ def _filter_facts_for_chapter(facts: list[dict], title: str) -> list[dict]:
             break
     if keep is None:
         keep = {"结构", "其他"}  # 默认只保留工程类
-    return [f for f in facts if f.get("category") in keep]
+    from app.services.evidence_roles import technical_facts
+    return technical_facts([f for f in facts if f.get("category") in keep])
 
 
 def _parallel_take(tasks: dict[str, callable]) -> dict:
@@ -135,11 +136,29 @@ def _image_plan(project_id: int) -> dict:
 
 
 def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
+    from app.services.image_planning import normalize_outline
+    # 已保存的旧思路也要重新分流，不能在补成源码/表格后又按旧需求追加位图占位。
+    ctx['outline'] = normalize_outline(ctx.get('outline') or {}, ctx.get('image_refs') or [])
     from app.services.image_completion import has_requests, complete
     from app.services.mermaid_source import normalize_body
+    from app.services.image_retrieval import bind_references
+    from app.services.mermaid_completion import complete as complete_mermaid
+    from app.services.evidence_roles import flag_unverified_conclusions, flag_capability_claims
+    from app.services.template_completion import complete as complete_templates, has_named_table
 
-    body = normalize_body(body)
-    return complete(ctx, body, project_id, node_id) if has_requests(ctx) else body
+    body = flag_capability_claims(flag_unverified_conclusions(normalize_body(body)))
+    if (ctx.get("outline") or {}).get("_writing_role") == "introduction":
+        return body
+    body = bind_references(body, ctx.get('image_refs') or [])
+    protected = set(ctx.get('img_skips') or {}) | {n['name'] for n in ctx['outline'].get('image_needs') or [] if n.get('source')=='material'}
+    # 从图片需求转出的表格不能仅因模型重写时省略占位就静默消失。
+    for need in ctx['outline'].get('table_needs') or []:
+        name = str(need.get('name') or '').strip() if isinstance(need,dict) else ''
+        if name and name not in body and name not in protected and not has_named_table(body,name):
+            body += '\n\n[图片占位：'+name+']\n'
+    body = complete_templates(body, protected)
+    body = complete_mermaid(body, protected)
+    return normalize_body(complete(ctx, body, project_id, node_id) if has_requests(ctx) else body)
 
 
 def _chapter_context(project_id: int, node_id: int, img_skips: dict[str, str] | None = None,
@@ -171,6 +190,13 @@ def _chapter_context(project_id: int, node_id: int, img_skips: dict[str, str] | 
             outline = None
     if not outline:
         raise ValueError("该章节尚无编写思路，请先完成「编写思路」确认")
+    # 根据真实目录判定，兼容没有角色标记的历史思路；只在用户触发生成时生效。
+    children = query("SELECT title FROM chapter_node WHERE project_id=%s AND parent_id=%s ORDER BY sort_order,id",
+                     (project_id, node_id))
+    if children:
+        outline = dict(outline, _writing_role="introduction", need_table=False,
+                       need_image=False, image_needs=[], table_needs=[],
+                       _child_titles=[child['title'] for child in children])
 
     siblings = [
         r["title"]
@@ -192,6 +218,7 @@ def _chapter_context(project_id: int, node_id: int, img_skips: dict[str, str] | 
     from app.services.lot_service import selected_lot_info
     from app.services.method_index import match_methods
     from app.services.requirement_service import requirements_for_chapter_text
+    from app.services.compilation_requirements import load_requirements, requirements_text
 
     dom = domain_of_project(project_id)  # 工法只在本领域库里选（跨域工法无参考价值）
 
@@ -231,7 +258,9 @@ def _chapter_context(project_id: int, node_id: int, img_skips: dict[str, str] | 
         # 经验内容并入取材需求：经验/思路里"参考某文件某章节"的指引可被选章 AI 命中
         "file_refs": lambda: _match_file_snippets(project_id, node["title"], outline, experiences, lot_profile),
         # 招标要求（评分办法/技术要求/编制要求/废标风险）作为编写依据
-        "reqs": lambda: requirements_for_chapter_text(project_id, node["title"]),
+        "reqs": lambda: (requirements_text(load_requirements(project_id),
+                    [node["title"], *(outline.get("_path") or parent_titles)])
+                    or requirements_for_chapter_text(project_id, node["title"])),
     })
     return {
         "node": node,
@@ -445,12 +474,13 @@ def generate_chapter_events(project_id: int, node_id: int):
 
         if has_requests(ctx):
             yield {"type": "chapter_images", "node_id": node_id}
-            completed = _finish_images(ctx, body, project_id, node_id)
-            if completed != body:
-                body = completed
-                yield {"type": "chapter_replace", "node_id": node_id, "content": body}
-            for error in ctx.get("image_generation_errors") or []:
-                yield {"type": "chapter_image_warning", "node_id": node_id, "content": error["reason"]}
+        # 源码补绘、模板和事实边界处理不依赖“是否需要付费生图”。
+        completed = _finish_images(ctx, body, project_id, node_id)
+        if completed != body:
+            body = completed
+            yield {"type": "chapter_replace", "node_id": node_id, "content": body}
+        for error in ctx.get("image_generation_errors") or []:
+            yield {"type": "chapter_image_warning", "node_id": node_id, "content": error["reason"]}
     except GeneratorExit:
         persist_one(project_id, node_id, body, used=_used_summary(ctx))
         raise

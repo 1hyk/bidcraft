@@ -60,6 +60,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
+import Paragraph from '@tiptap/extension-paragraph'
 import Image from '@tiptap/extension-image'
 import TextAlign from '@tiptap/extension-text-align'
 import TextStyle from '@tiptap/extension-text-style'
@@ -114,7 +115,16 @@ const emit = defineEmits(['update:modelValue', 'save', 'generate'])
 const editor = useEditor({
   content: markdownToHtml(props.modelValue),
   extensions: [
-    StarterKit,
+    StarterKit.configure({ paragraph: false }),
+    Paragraph.extend({
+      addAttributes() {
+        return { ...this.parent?.(), figureCaption: {
+          default: false,
+          parseHTML: element => element.getAttribute('data-figure-caption') === 'true',
+          renderHTML: attrs => attrs.figureCaption ? { 'data-figure-caption': 'true' } : {},
+        } }
+      },
+    }),
     TextStyle,
     Color,
     Highlight.configure({ multicolor: true }),
@@ -170,14 +180,33 @@ async function handlePasteImage(file) {
 //   用户清除 mark 后保存的纯文本 token 重开保持不红（清除持久）；真实 <mark> 在重开时照常显示。
 function markdownToHtml(md) {
   if (!md) return '<p></p>'
-  if (/^\s*</.test(md)) return unwrapStrikethrough(md)
+  if (/^\s*</.test(md)) return normalizeFigureCaptions(unwrapStrikethrough(md))
   try {
-    return wrapTdzAsMark(
+    return normalizeFigureCaptions(wrapTdzAsMark(
       mermaidBlocksToNodes(unwrapBlockquotes(marked.parse(protectTilde(md)))),
-    )
+    ))
   } catch {
     return '<p></p>'
   }
+}
+
+function normalizeFigureCaptions(html) {
+  const root = document.createElement('div')
+  root.innerHTML = html
+  for (const figure of root.querySelectorAll('div.mermaid-block, img')) {
+    const block = figure.parentElement?.tagName === 'P' ? figure.parentElement : figure
+    for (const candidate of [block.nextElementSibling, block.previousElementSibling]) {
+      if (!candidate || candidate.tagName !== 'P') continue
+      const match = candidate.textContent.trim().match(/^图\s*[：:]\s*(\S[^\n]{0,150})$/)
+      if (!match && candidate.dataset.figureCaption !== 'true') continue
+      if (match) candidate.textContent = match[1].trim()
+      candidate.dataset.figureCaption = 'true'
+      candidate.style.textAlign = 'center'
+      block.after(candidate)
+      break
+    }
+  }
+  return root.innerHTML
 }
 // 里程/标段区间的单个波浪号（如 DK235+900~DK236+610）若原样进 marked，GFM 会把成对的 `~`
 // 误配成删除线 → 输出 <del>、正文里波浪号消失。正文不使用删除线语法（工具栏亦无此按钮），

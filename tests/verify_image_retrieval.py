@@ -35,6 +35,13 @@ class ImageRetrievalTests(unittest.TestCase):
         self.assertEqual(self.id_a, retrieval.image_identity(self.copy))
         self.assertNotEqual(self.id_a, self.id_b)
 
+    def test_unverified_old_generated_image_is_not_reused(self):
+        node={'title':self.ref['caption'],'outline':{'need_image':True}}
+        old={**self.ref,'generated':True}
+        self.assertEqual(retrieval.candidates(node,[old]),[])
+        approved={**old,'validated':True}
+        self.assertEqual(retrieval.candidates(node,[approved])[0]['asset_id'],self.id_a)
+
     def test_independent_recall_and_ownership(self):
         root = {"id": 1, "title": "无人机现场照片", "outline": {"need_image": True, "_page_ids": [5]},
                 "children": [{"id": 2, "title": "无人机现场照片", "outline": {"need_image": True}}]}

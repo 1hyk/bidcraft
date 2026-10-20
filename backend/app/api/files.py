@@ -153,6 +153,18 @@ def file_sections(project_id: int, file_id: int):
     )
 
 
+@router.get("/{file_id}/locate-requirement/{requirement_id}")
+def locate_requirement(project_id: int, file_id: int, requirement_id: int):
+    from app.services.source_locator import locate
+    from app.services.requirement_matrix import requirements
+    file = query_one("SELECT file_name FROM project_file WHERE id=%s AND project_id=%s AND category IN ('tender','clarification')", (file_id, project_id))
+    requirement = next((r for r in requirements(project_id) if r['id'] == requirement_id), None)
+    if not file or not requirement or requirement.get('source_file') != file['file_name']:
+        raise HTTPException(404, "要求或来源文件不存在")
+    sections = query("SELECT id,sec_path,content FROM file_section_index WHERE project_id=%s AND file_id=%s ORDER BY start_line", (project_id, file_id))
+    return locate(requirement, sections)
+
+
 @router.get("/{file_id}/sections/{index_id}/content")
 def file_section_content(project_id: int, file_id: int, index_id: int):
     """按索引取章节完整原文（含子节与图片引用，不截断）。"""

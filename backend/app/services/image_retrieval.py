@@ -87,6 +87,9 @@ def candidates(node: dict, assets: list[dict], limit: int = 6) -> list[dict]:
     title_terms = _terms(node.get("title") or "")
     ranked = []
     for asset in assets:
+        # 老版本生成图保留给已有正文导出，但没有视觉核验的不能作为新稿候选复用。
+        if asset.get('generated') and not asset.get('validated'):
+            continue
         description = _terms(asset["caption"] + " " + str(asset["content"]))
         score = len(terms & description) / math.sqrt(max(1, len(terms) * len(description)))
         caption_terms = _terms(asset["caption"])
@@ -152,8 +155,11 @@ def bind_references(body: str, refs: list[dict]) -> str:
                 if len({a["asset_id"] for a in hits}) == 1:
                     asset = hits[0]
                     break
-        return (f"[图片占位：{asset['caption']}|素材ID={asset['asset_id']}]"
-                if asset else match.group(0))
+        if asset:
+            return f"[图片占位：{asset['caption']}|素材ID={asset['asset_id']}]"
+        # 无效或不属于本章候选的 ID 不可信，不能冒充已绑定素材流入导出件。
+        clean_name = re.split(r"\|\s*素材ID", raw, maxsplit=1)[0].strip()
+        return f"[图片占位：{clean_name}]"
 
     # 代码围栏里的示例是字面文本，不能当成实际配图消费。
     parts = re.split(r"(```.*?```)", body, flags=re.S)
