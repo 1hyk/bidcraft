@@ -27,7 +27,11 @@ class ThreadPoolTaskRunner(TaskRunner):
             " VALUES (%s, %s, 'running', 0, NULL, %s, %s)",
             (task_type, ref_id, datetime.now(), datetime.now()),
         )
-        self.pool.submit(self._run, task_id, fn, *args)
+        try:
+            self.pool.submit(self._run, task_id, fn, *args)
+        except Exception:
+            self._update(task_id,status='failed',detail='任务未能启动，请重试')
+            raise
         return task_id
 
     @staticmethod
@@ -40,7 +44,9 @@ class ThreadPoolTaskRunner(TaskRunner):
 
     def _run(self, task_id: int, fn, *args) -> None:
         try:
-            fn(task_id, *args)
+            result = fn(task_id, *args)
+            if isinstance(result,dict) and result.get('ok') is False:
+                raise ValueError(str(result.get('error') or '任务未完成，请重试'))
             self._update(task_id, status="success", progress=100)
         except Exception as e:  # noqa: BLE001 任务失败落库，不中断服务
             self._update(

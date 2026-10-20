@@ -76,6 +76,10 @@ def _startup():
         # 业务单据同步复位：线程随进程死亡，parsing 状态永远不会推进，不复位则无法重新发起
         cur.execute("UPDATE knowledge_doc SET status = 'failed' WHERE status = 'parsing'")
         cur.execute("UPDATE project_file SET status = 'failed' WHERE status = 'parsing'")
+        # 正文批量线程不在目录图的自动恢复范围；writing 会话的 running 可能为0。
+        cur.execute("UPDATE compile_session SET stage='failed', running=0,"
+                    " error='服务重启导致正文生成中断，已保存章节保留，可重试未完成章节'"
+                    " WHERE stage='writing'")
         cur.execute("SHOW TABLES LIKE 'company_document'")
         if cur.fetchone():
             cur.execute("UPDATE company_document SET status='failed', error='服务重启导致提取中断，可重试' WHERE status='extracting'")

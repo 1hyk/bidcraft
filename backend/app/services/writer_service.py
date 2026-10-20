@@ -16,7 +16,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app.agents.writer_agent import write_chapter, write_chapter_stream
-from app.core.database import close_thread_conn, query, query_one
+from app.core.database import close_thread_conn, query, query_one, execute
 from app.services.matching import load_pages_by_ids
 from app.services.section_service import persist_one
 
@@ -136,6 +136,8 @@ def _image_plan(project_id: int) -> dict:
 
 
 def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
+    if not body or not body.strip():
+        raise ValueError('模型未返回正文，原有内容已保留，请重试')
     from app.services.image_planning import normalize_outline
     # 已保存的旧思路也要重新分流，不能在补成源码/表格后又按旧需求追加位图占位。
     ctx['outline'] = normalize_outline(ctx.get('outline') or {}, ctx.get('image_refs') or [])
@@ -438,6 +440,7 @@ def generate_chapter_events(project_id: int, node_id: int):
         if "".join(buf).strip():
             try:
                 persist_one(project_id, node_id, "".join(buf), used=_used_summary(ctx))
+                execute("UPDATE chapter_node SET status='thought_ready' WHERE id=%s AND project_id=%s",(node_id,project_id))
                 print(f"[单章生成] 客户端断开，已保留部分内容 node={node_id}（{len(''.join(buf))} 字）")
             except Exception:  # noqa: BLE001
                 pass
@@ -483,6 +486,7 @@ def generate_chapter_events(project_id: int, node_id: int):
             yield {"type": "chapter_image_warning", "node_id": node_id, "content": error["reason"]}
     except GeneratorExit:
         persist_one(project_id, node_id, body, used=_used_summary(ctx))
+        execute("UPDATE chapter_node SET status='thought_ready' WHERE id=%s AND project_id=%s",(node_id,project_id))
         raise
     # 只保存最终版一次，让 prev_content 仍指向生成前的正文，而非本次首稿。
     persist_one(project_id, node_id, body, used=_used_summary(ctx))
@@ -519,6 +523,31 @@ def write_chapter_once(project_id: int, node_id: int, extra_requirements: str = 
 
 # ---------------------------------------------------------------- 批量（可停止）
 
+def _prepare_batch_context(project_id, total):
+    """准备异常也必须释放运行标记，否则用户无法重试。"""
+    from app.services import compile_service
+    from app.services.image_ownership import project_image_skips
+    try:
+        compile_service.update_progress(project_id, stage='writing', progress=0, total=total)
+        return _target_map(project_id), project_image_skips(project_id), _image_plan(project_id)
+    except Exception:
+        _batch_running.discard(project_id)
+        _stop_flags.pop(project_id,None)
+        compile_service.update_progress(project_id, stage='failed', progress=0, total=total,
+                                        error='生成准备失败，原有正文已保留，请重试')
+        raise
+
+
+def _launch_batch(project_id, run):
+    from app.services import compile_service
+    try:
+        threading.Thread(target=run,daemon=True).start()
+    except Exception:
+        _batch_running.discard(project_id)
+        _stop_flags.pop(project_id,None)
+        compile_service.update_progress(project_id,stage='failed',error='生成任务未能启动，原有正文已保留，请重试')
+        raise
+
 def _pending_nodes(project_id: int) -> list[dict]:
     from app.services.section_service import generation_node_ids
 
@@ -544,13 +573,7 @@ def start_batch(project_id: int) -> dict:
     _stop_flags[project_id] = stop
     _batch_running.add(project_id)
     total = len(nodes)
-    compile_service.update_progress(project_id, stage="writing", progress=0, total=total)
-    targets = _target_map(project_id)   # 篇幅计划：循环外算一次，别每章重算一遍分摊
-    # 图名归属也在循环外算一次：并发 10 章，每章重算等于把同一份目录解析 10 遍
-    from app.services.image_ownership import project_image_skips
-
-    img_skips = project_image_skips(project_id)
-    image_plan = _image_plan(project_id)
+    targets, img_skips, image_plan = _prepare_batch_context(project_id,total)
 
     def _write(node: dict) -> bool:
         if stop.is_set():
@@ -587,15 +610,19 @@ def start_batch(project_id: int) -> dict:
             stopped = stop.is_set()
             compile_service.update_progress(
                 project_id,
-                stage="outlines_ready" if stopped or done < total else "done",
+                stage="outlines_ready" if stopped else "done" if done==total else "failed",
                 progress=done, total=total,
+                error='' if stopped else None if done==total else f'部分章节生成失败：{done}/{total}，已保留成功内容，可重试未完成章节',
             )
             print(f"[批量生成] {'中途停止' if stopped else '完成'} {done}/{total}")
+        except Exception:
+            compile_service.update_progress(project_id,stage='failed',progress=done,total=total,
+                                            error='批量生成异常，已保存的正文保留，请重试未完成章节')
         finally:
             _batch_running.discard(project_id)
             _stop_flags.pop(project_id, None)
 
-    threading.Thread(target=_run, daemon=True).start()
+    _launch_batch(project_id,_run)
     return {"started": True, "total": total}
 
 
@@ -640,14 +667,7 @@ def rewrite_chapters(project_id: int, node_ids: list[int], task_id: int | None =
     _stop_flags[project_id] = stop
     _batch_running.add(project_id)
     total = len(nodes)
-    compile_service.update_progress(project_id, stage="writing", progress=0, total=total)
-
-    targets = _target_map(project_id)   # 篇幅计划：循环外算一次
-    # 图名归属同样循环外算一次（并发 10 章，重算 = 把同一份目录解析 10 遍）
-    from app.services.image_ownership import project_image_skips
-
-    img_skips = project_image_skips(project_id)
-    image_plan = _image_plan(project_id)
+    targets, img_skips, image_plan = _prepare_batch_context(project_id,total)
 
     def _prog(done: int, detail: str = "") -> None:
         compile_service.update_progress(project_id, stage="writing", progress=done, total=total)
@@ -688,8 +708,9 @@ def rewrite_chapters(project_id: int, node_ids: list[int], task_id: int | None =
                         print(f"[指定重写] 单章失败: {e}")
                     _prog(done, f"已重写 {done}/{total} 章")
             complete = done == total
-            compile_service.update_progress(project_id, stage="done" if complete else "failed", progress=done, total=total,
-                                            error=None if complete else f'部分章节未完成：{done}/{total}')
+            stopped = stop.is_set() and not complete
+            compile_service.update_progress(project_id, stage="done" if complete else "outlines_ready" if stopped else "failed", progress=done, total=total,
+                                            error='' if stopped else None if complete else f'部分章节未完成：{done}/{total}')
             if task_id:
                 execute("UPDATE task SET status = %s, progress = %s, detail = %s,"
                         " updated_at = NOW() WHERE id = %s",
@@ -704,7 +725,7 @@ def rewrite_chapters(project_id: int, node_ids: list[int], task_id: int | None =
             _batch_running.discard(project_id)
             _stop_flags.pop(project_id, None)
 
-    threading.Thread(target=_run, daemon=True).start()
+    _launch_batch(project_id,_run)
     return {"started": True, "total": total, "titles": [n["title"] for n in nodes]}
 
 
