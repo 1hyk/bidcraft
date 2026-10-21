@@ -72,23 +72,8 @@ def _flatten_toc(toc: dict) -> list[dict]:
 
 
 def _chapter_skeleton(domain: str, tender_toc: dict | None) -> list[str] | None:
-    """章级骨架候选：**招标规定的目录 > 本领域声明的 chapters > 不给**（None）。
-
-    这一档此前根本不存在：`generate_toc_titles` 无条件吃 `orchestrate_agent.
-    SKELETON_CHAPTERS`（11 个铁路土建章名），lowalt 项目照领一份，而知识库里对得上
-    评审办法的语料在**章级**压根够不着（`chapter_skeleton` 只喂子节层）。
-
-    最后一档（None）不是"降级"——没招标、域也没声明时，让模型照项目信息自己判断该有
-    哪几章，比撞一张不知道属于哪个领域的章名表强。
-
-    招标已规定目录时**返回 None 而不是领域骨架**：红线已定，再摆一份候选只会让模型
-    在两者之间摇摆。
-    """
-    from app.core.domains import chapters_of
-
-    if (tender_toc or {}).get("chapters"):
-        return None
-    return list(chapters_of(domain))
+    """兼容旧调用：领域不提供自动目录骨架，招标依据由独立参数传入。"""
+    return None
 
 
 def node_generate_toc(state: CompileState) -> dict:
@@ -108,10 +93,12 @@ def node_generate_toc(state: CompileState) -> dict:
     contract = load_requirements(project_id)
     required_chapters = scope_chapters(_tender_toc, contract, settings.generation_root_title)
     tender_text = requirements_text(contract) or state["tender_requirements"]
+    from app.agents.orchestrate_agent import require_tender_basis
+    require_tender_basis(tender_text, _tender_toc)
     titles = generate_toc_titles(
         state["project_info"], state["professions"],
-        state["tender_requirements"], _tender_toc,
-        chapters=_chapter_skeleton(_dom, _tender_toc), domain=_dom,
+        tender_text, _tender_toc,
+        domain=_dom,
     )
     if not titles:
         raise ValueError("目录章骨架生成失败（空结果）")
@@ -135,6 +122,11 @@ def node_generate_toc(state: CompileState) -> dict:
         from app.core.chapter_title import normalize
         if (required_chapters and normalize(ch["title"]) == normalize(settings.generation_root_title)):
             ch["children"] = deepcopy(required_chapters)
+            return ch
+        from app.services.compilation_requirements import required_stage_children
+        stages = required_stage_children(ch['title'], contract)
+        if stages:
+            ch['children'] = stages
             return ch
         ch["children"] = generate_toc_children(
             ch["title"], state["project_info"], state["professions"],
@@ -193,7 +185,8 @@ def node_generate_toc(state: CompileState) -> dict:
             raise ValueError("子节生成失败，原目录未替换：" + "；".join(errors))
         compile_service.update_progress(project_id, progress=done)
 
-    from app.services.compilation_requirements import validate_stage_coverage
+    from app.services.compilation_requirements import validate_stage_coverage, validate_scope_coverage
+    validate_scope_coverage(toc, contract, _tender_toc, settings.generation_root_title)
     validate_stage_coverage(toc, contract)
     # 落库：**先清空旧目录树（连同已写正文与思路）再写入新目录**。
     # 2026-09-10 用户拍板：「重新生成目录」＝真正的重来，前端已二次确认并明确告知

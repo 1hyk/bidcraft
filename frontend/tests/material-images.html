@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>图片引用往返测试</title>
+<p id="result">正在测试</p><div id="editor"></div>
+<script type="module">
+import {Editor} from '@tiptap/core'
+import StarterKit from '@tiptap/starter-kit'
+import {MaterialImage,materializeImages} from '../src/materialImages.js'
+try {
+ const token='[图片占位：场景图|素材ID=IMG-aaaaaaaaaaaaaaaaaaaaaaaa]'
+ const node=MaterialImage.extend({addNodeView(){return ()=>{const dom=document.createElement('span');dom.textContent='图片预览替身';return {dom}}}})
+ const options={extensions:[StarterKit,node],content:materializeImages('<p>前文<mark>'+token+'</mark>后文</p>')}
+ const editor=new Editor({...options,element:document.querySelector('#editor')})
+ let found=false
+ editor.state.doc.descendants((n,pos)=>{if(n.type.name==='materialImage'){found=true;editor.view.dispatch(editor.state.tr.setNodeMarkup(pos,undefined,{...n.attrs,history:'[{"asset_id":"old","caption":"原图"}]'}))}})
+ if(!found)throw Error('未解析图片引用')
+ const html=editor.getHTML()
+ if(!html.includes(token) || !html.includes('data-history') || !html.includes('前文') || !html.includes('后文'))throw Error('序列化丢失引用或周边正文')
+ const another=new Editor({...options,content:materializeImages(html)})
+ let count=0
+ another.state.doc.descendants(n=>{if(n.type.name==='materialImage'){count++;if(!n.attrs.history.includes('old'))throw Error('回退记录丢失')}})
+ if(count!==1)throw Error('重复生成图片节点')
+ document.querySelector('#result').textContent='通过：素材引用解析、保存重开、回退记录、周边正文保留，均未调用模型。'
+ another.destroy();editor.destroy()
+}catch(e){document.querySelector('#result').textContent='失败：'+e.message}
+</script>

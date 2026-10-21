@@ -19,6 +19,19 @@ class InlineThread:
 
 
 class FailureRecovery(unittest.TestCase):
+    def test_single_retry_reconciles_only_when_all_scoped_bodies_exist(self):
+        rows=[{'id':1,'status':'generated','content':{'body':'正文'}}, {'id':2,'status':'generated','content':{'body':''}}]
+        with patch.object(writer,'query_one',return_value={'stage':'failed'}), patch.object(writer,'query',return_value=rows):
+            writer._reconcile_single_retry(self.pid)
+            self.progress.assert_not_called()
+            rows[1]['content']['body']='补齐正文'
+            writer._reconcile_single_retry(self.pid)
+            self.assertEqual(self.progress.call_args.kwargs['stage'],'done')
+            self.progress.reset_mock()
+            writer._batch_running.add(self.pid)
+            writer._reconcile_single_retry(self.pid)
+            self.progress.assert_not_called()
+
     def setUp(self):
         self.pid=987654
         self.stack=ExitStack();self.addCleanup(self.stack.close)

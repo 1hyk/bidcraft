@@ -22,7 +22,7 @@ def available():
     return bool(path and (path.parent/'python.exe').is_file())
 
 
-def render(input_path: Path, output_dir: Path):
+def render(input_path: Path, output_dir: Path, footer_format=None):
     exe = executable()
     if exe is None or not (exe.parent/'python.exe').is_file():
         raise ValueError('实际分页需要配置含 Python/UNO 的 LibreOffice：DOCX_RENDERER_PATH')
@@ -30,6 +30,9 @@ def render(input_path: Path, output_dir: Path):
     pipe = 'bidcraft_' + uuid.uuid4().hex
     flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
     with tempfile.TemporaryDirectory(prefix='bidcraft_office_', ignore_cleanup_errors=True) as profile:
+        # Office会对输入文件加锁；每次使用独立副本，避免同一源文件并发只读时争用。
+        private_input=Path(profile)/'input.docx'
+        shutil.copy2(input_path,private_input)
         proc = subprocess.Popen([str(exe), '-env:UserInstallation='+Path(profile).as_uri(),
                                  '--headless','--norestore','--nodefault','--nofirststartwizard',
                                  '--accept=pipe,name='+pipe+';urp;StarOffice.ServiceManager'],
@@ -37,13 +40,19 @@ def render(input_path: Path, output_dir: Path):
         try:
             environment = dict(os.environ, PYTHONIOENCODING='utf-8')
             result = subprocess.run([str(exe.parent/'python.exe'), str(Path(__file__).with_name('office_worker.py')),
-                                     pipe,str(input_path.resolve()),str(output_dir.resolve())],
+                                     pipe,str(private_input.resolve()),str(output_dir.resolve())],
                                     capture_output=True, timeout=settings.docx_renderer_timeout, creationflags=flags, env=environment)
             if result.returncode:
                 raise ValueError('本地排版失败：'+result.stderr.decode('utf-8',errors='replace')[-500:])
             metadata = json.loads((output_dir/'layout.json').read_text(encoding='utf-8'))
             from pypdf import PdfReader
             metadata['total_pages'] = len(PdfReader(output_dir/'document.pdf').pages)
+            if footer_format is not None:
+                from app.services.export_validation import validate_files
+                final=validate_files(private_input,output_dir,footer_format)
+                metadata['engine_pagination']={k:metadata.get(k) for k in ('body_start','body_end','body_pages')}
+                metadata.update(final)
+                (output_dir/'layout.json').write_text(json.dumps(metadata,ensure_ascii=False),encoding='utf-8')
             if not 1 <= metadata['body_pages'] <= metadata['total_pages']:
                 raise ValueError('排版引擎返回的正文页范围无效')
             return metadata

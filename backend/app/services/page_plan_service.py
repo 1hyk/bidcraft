@@ -30,6 +30,9 @@ def _ordered_nodes(project_id: int) -> list[dict]:
 
     def walk(nodes: list[dict], level: int, ancestor: float | None) -> None:
         for n in nodes:
+            from app.services.scoring_index import is_index
+            if is_index(n):
+                continue  # 前置索引不占正文扩写预算。
             kids = n.get("children") or []
             out.append({
                 "id": n["id"], "title": n["title"], "level": level,

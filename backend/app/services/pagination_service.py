@@ -26,7 +26,9 @@ def snapshot(project_id):
                      'body':data.get('body') or '', 'format':data.get('format') or 'md'})
     style = get_project_style(project_id).to_dict()
     project=query_one('SELECT name FROM project WHERE id=%s',(project_id,)) or {}
-    fingerprint = hashlib.sha256(json.dumps({'layout_version':12,'style':style,'body':body,'project':project},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    from app.services.export_dependencies import project_dependencies
+    dependencies=project_dependencies(project_id,body)
+    fingerprint = hashlib.sha256(json.dumps({'layout_version':14,'style':style,'body':body,'project':project,'dependencies':dependencies},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {'signature':fingerprint,'style':style,'words':sum(content_words(x) for x in body),
             'complete':bool(body) and all(x['body'].strip() for x in body)}
 
@@ -48,14 +50,18 @@ def measure(project_id, input_path=None):
         if not before['complete']: raise ValueError('请先完成当前编制范围全部章节正文，再测量页数')
         directory=settings.uploads_dir/'layout'/f'project_{project_id}'/before['signature']
         previous=stored(project_id)
-        if previous and previous.get('signature')==before['signature'] and (directory/'document.docx').is_file() and (directory/'document.pdf').is_file():
+        from app.services.export_dependencies import docx_source_signature
+        source_signature=docx_source_signature(input_path) if input_path is not None else None
+        source_matches=input_path is None or bool(previous and previous.get('source_signature')==source_signature)
+        if previous and source_matches and previous.get('signature')==before['signature'] and (directory/'document.docx').is_file() and (directory/'document.pdf').is_file():
             return view(project_id,previous,before)
         path=input_path
         if path is None:path,_=export_project_docx(project_id)
-        actual=render(path,directory)
+        if source_signature is None:source_signature=docx_source_signature(path)
+        actual=render(path,directory,footer_format=before.get('style',{}).get('footer_format'))
         if snapshot(project_id)['signature']!=before['signature']:
             raise ValueError('测量期间正文或排版有修改，本次结果未用于校准，请重新测量')
-        data={**before,**actual,'value':round(before['words']/actual['body_pages'],2),
+        data={**before,**actual,'source_signature':source_signature,'value':round(before['words']/actual['body_pages'],2),
               'measured_at':datetime.now(timezone.utc).isoformat()}
         execute("UPDATE project SET page_plan=JSON_SET(COALESCE(page_plan,JSON_OBJECT()), '$.measurement', JSON_EXTRACT(%s,'$')) WHERE id=%s",(json.dumps(data,ensure_ascii=False),project_id))
         return view(project_id,data,before)

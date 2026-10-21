@@ -370,6 +370,10 @@ def migrate_db() -> str:
             cur.execute("ALTER TABLE project ADD COLUMN docx_style JSON NULL"
                         " COMMENT '导出 Word 的排版规格（字体/字号/行距/页边距/页眉页脚；NULL=内置默认）'")
             applied.append("project.docx_style")
+        cur.execute("SHOW COLUMNS FROM project LIKE 'service_content'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE project ADD COLUMN service_content TEXT NULL COMMENT '经用户保存的本次服务内容：与服务分类分开'")
+            applied.append('project.service_content')
         for column, comment in [('project_types','项目业务类型列表：可多选，仅作生成侧重点，不隔离素材；NULL兼容旧分类'),
                                 ('technical_objects','经用户确认的技术对象列表：从招标文件建议，可人工修正')]:
             cur.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s AND COLUMN_NAME=%s',('project',column))

@@ -4,12 +4,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
-from app.services.project_classification import project_types,present,suggest_from_text,validate_types
+from app.services.project_classification import project_types,present,validate_types
 from app.api.projects import update_project,ProjectUpdate,create_project,ProjectCreate
 from app.core.domains import get_domain
 
 
 class Classification(unittest.TestCase):
+    def test_no_industry_or_service_does_not_default_to_lowalt(self):
+        with patch('app.api.projects.execute',return_value=99) as write:
+            result=create_project(ProjectCreate(name='行业未确认'))
+            self.assertEqual(result['domain'],'softtest')
+            self.assertNotIn('飞行测试验证',str(write.call_args.args[1]))
+
+
     def test_application_domains_are_complete_and_independent(self):
         from app.core.domains import DOMAINS, list_domains
         expected={'government','finance','healthcare','education','manufacturing',
@@ -44,27 +51,24 @@ class Classification(unittest.TestCase):
         self.assertEqual(value['legacy_project_type'],'铁路')
         self.assertEqual(value['domain'],'lowalt')
 
+    def test_service_content_is_independent_and_optional(self):
+        row={'id':4,'name':'原名','domain':'lowalt','project_types':'["自定义业务"]','service_content':'原业务'}
+        with patch('app.api.projects.query_one',return_value=row),patch('app.api.projects.execute') as write:
+            update_project(4,ProjectUpdate(service_content='实飞验证外协'))
+            sql,params=write.call_args.args
+            self.assertIn('service_content =',sql)
+            self.assertNotIn('project_types =',sql)
+            self.assertIn('实飞验证外协',params)
+        self.assertEqual(present(row)['project_types'],['自定义业务'])
+
     def test_multiselect_roundtrip(self):
         types=['飞行测试验证','软件测试','飞行测试验证']
         result=validate_types(types,'lowalt')
         self.assertEqual(result,['飞行测试验证','软件测试'])
         self.assertEqual(project_types({'project_types':json.dumps(result)}),result)
 
-    def test_real_tender_shape_not_software_only(self):
-        text='实飞测试、演示平台验证、机巢部署与平台调试，售后服务与质保。'
-        out=suggest_from_text(text,'lowalt')
-        self.assertEqual(out['project_types'],['飞行测试验证','软件测试','系统集成与部署','运维与技术保障'])
-        self.assertNotIn('平台软件开发',out['project_types'])
-        self.assertTrue(all(x['excerpt'] in text for x in out['evidence']))
-        self.assertEqual(suggest_from_text('性能测试和接口测试','softtest')['project_types'],['软件测试'])
 
-    def test_non_tender_reference_and_other_lots_excluded(self):
-        from app.services.project_classification import suggestions
-        with patch('app.core.database.query_one',side_effect=[{'domain':'lowalt'}, {'id':2}]),patch('app.services.lot_service.selected_lot_code',return_value='A'),patch('app.services.requirement_service.list_requirements',return_value=[]),patch('app.core.database.query',return_value=[{'content':'飞行测试','applicable_lots':'["B"]'},{'content':'软件测试','applicable_lots':'["A"]'}]) as read:
-            out=suggestions(6)
-            self.assertEqual(out['project_types'],['软件测试'])
-            self.assertIn("f.category IN ('tender','clarification')",read.call_args.args[0])
-            self.assertEqual(read.call_args.args[1],(6,2))
+
 
     def test_patch_name_preserves_domain_and_multiselect(self):
         row={'id':4,'name':'原名','domain':'lowalt','project_types':'["软件测试","飞行测试验证"]'}

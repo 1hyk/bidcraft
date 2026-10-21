@@ -139,6 +139,12 @@ def export_project_docx(
         style = docx_style.get_project_style(project_id)
 
     contents = _load_contents(project_id)
+    from app.services.document_checks import resolve_requirement_refs, internal_references
+    if any(internal_references(content.get('body') or '') for content in contents.values()):
+        from app.services.compilation_requirements import load_requirements
+        requirements = load_requirements(project_id)
+        contents = {nid: {**content, 'body': resolve_requirement_refs(content.get('body') or '', requirements)}
+                    for nid, content in contents.items()}
     from app.core.generation_scope import node_ids
 
     allowed = node_ids(tree)
@@ -153,7 +159,8 @@ def export_project_docx(
     # 目录独占一节：封面与目录不带页眉页脚
     doc.add_section(WD_SECTION.NEW_PAGE)
     _add_toc(doc, style)
-    _add_scoring_index(doc, style, project_id, tree)
+    # 索引来自编辑器正式内容，禁止导出时再秘密追加第二份自动表。
+    _render_editor_indexes(doc, style, tree, contents)
 
     # 正文节：页眉项目名 + 页脚页码，页码从 1 重新起算（目录不占正文页码）
     body = doc.add_section(WD_SECTION.NEW_PAGE)
@@ -322,36 +329,22 @@ def _add_cover(doc, style: DocxStyle, project_name: str) -> None:
           style.table_size_pt, style.body_font, color=GRAY)
 
 
-def _add_scoring_index(doc, style, project_id, tree):
-    from app.services.requirement_service import list_requirements
-    from app.core.chapter_title import related
-    requirements=[r for r in list_requirements(project_id,'评分办法') if r.get('status')!='ignored']
-    if not requirements:return
-    nodes=[]
-    def walk(items):
-        for node in items:
-            nodes.append(node);walk(node.get('children') or [])
+def _render_editor_indexes(doc, style, tree, contents):
+    from app.services.scoring_index import is_index
+    from app.core.generation_scope import node_ids
+    allowed = node_ids(tree)
+    def walk(nodes):
+        for node in nodes:
+            if is_index(node):
+                p = _para(doc, style)
+                _font(p.add_run(node['title']), style.body_size_pt, style.body_font, bold=True)
+                body = _normalize_body(contents.get(node['id']))
+                def validate_reference(match):
+                    return match[0] if int(match[1]) in allowed else '[章节引用失效，请重新关联]'
+                body = re.sub(r'<span[^>]*data-page-reference="(\d+)"[^>]*>.*?</span>', validate_reference, body, flags=re.S)
+                _render_html(doc, style, body)
+            walk(node.get('children') or [])
     walk(tree)
-    # 只收录能定位到当前技术编制范围的评分项；不把商务评分混入技术标。
-    entries=[]
-    for req in requirements:
-        matches=[n for n in nodes if related(req['title'],n['title'])]
-        if not matches:
-            matches=[n for n in nodes if related(req.get('suggested_chapter'),n['title'])]
-        if matches:entries.append((req,matches[0]))
-    if not entries:return
-    p=_para(doc,style)
-    _font(p.add_run('技术评分响应索引'),style.body_size_pt,style.body_font,bold=True)
-    p=_para(doc,style)
-    _font(p.add_run('下表定位正文响应章节；实际资质、业绩和检测等证明材料仍须据实补齐。'),style.table_size_pt,style.body_font,color=GRAY)
-    table=doc.add_table(rows=1,cols=3);table.style='Table Grid'
-    for cell,label in zip(table.rows[0].cells,['评分项','对应章节','正文页码']):
-        _font(cell.paragraphs[0].add_run(label),style.table_size_pt,style.body_font,bold=True)
-    for req,node in entries:
-        cells=table.add_row().cells
-        for cell,value in zip(cells[:2],[req['title'],node['title']]):
-            _font(cell.paragraphs[0].add_run(value),style.table_size_pt,style.body_font)
-        _add_field(cells[2].paragraphs[0],f" PAGEREF bc_node_{node['id']} \\h ",style,placeholder='待更新',dirty=True)
 
 
 def _add_toc(doc, style: DocxStyle) -> None:
@@ -571,6 +564,9 @@ def _walk_nodes(doc, style: DocxStyle, nodes: list[dict],
     """
     position = 0
     for node in nodes:
+        from app.services.scoring_index import is_index
+        if is_index(node):
+            continue
         nid = node.get("id")
         title = (node.get("title") or "").strip()
         if title:
@@ -589,6 +585,7 @@ def _walk_nodes(doc, style: DocxStyle, nodes: list[dict],
             # 「需补真实材料」那句灰字都拿不到，文末清单却把同一处列出来了（两处各说各话）。
             _render_html(doc, style, html, base_level=min(level, MAX_HEAD_LEVEL),
                          drop_title=title or None,
+                         auxiliary_headings=bool(node.get('children')),
                          images=index or {})
         elif not (node.get("children") or []):
             # 叶子章没有正文：显式标出来，免得导出稿看起来"漏了"
@@ -600,7 +597,8 @@ def _walk_nodes(doc, style: DocxStyle, nodes: list[dict],
 
 
 def _render_html(doc, style: DocxStyle, html: str, base_level: int = 1,
-                 drop_title: str | None = None, images: dict | None = None) -> None:
+                 drop_title: str | None = None, images: dict | None = None,
+                 auxiliary_headings: bool = False) -> None:
     try:
         root = lxml.html.fromstring(f"<div>{html}</div>")
     except Exception:  # noqa: BLE001 HTML 畸形时退化成纯文本，宁可少格式也别丢内容
@@ -608,21 +606,40 @@ def _render_html(doc, style: DocxStyle, html: str, base_level: int = 1,
         _font(p.add_run(re.sub(r"<[^>]+>", "", html)), style.body_size_pt, style.body_font)
         return          # 这条兜底路不过 _walk_block，占位不会被换成图（已知）
     if drop_title:
+        from app.core.chapter_title import _PREFIX_RE
+        def clean_heading(text):
+            for _ in range(8):
+                before = text
+                text = re.sub(r'^\s*#{1,6}\s*', '', text).strip()
+                text = _PREFIX_RE.sub('', text).strip()
+                if before == text:
+                    break
+            return text
+        # 富文本标题中有时还残留 Markdown 前缀，先清理，才能识别复述章名。
+        for element in root.iter():
+            if isinstance(element.tag, str) and re.fullmatch(r'h[1-6]', element.tag.lower()):
+                text = clean_heading(element.text_content().strip())
+                element.clear()
+                element.text = text
         _drop_restated_title(root, drop_title)
         root.set('data-chapter-title', drop_title)
         # 正文内的小标题同样需要编号；仅在章节导出入口启用，独立渲染保持原行为。
         headings = [e for e in root.iter() if isinstance(e.tag, str) and re.fullmatch(r'h[1-6]', e.tag.lower())]
-        minimum = min((int(e.tag[1]) for e in headings), default=1)
+        levels = sorted({int(e.tag[1]) for e in headings})
         counters = {}
         for element in headings:
-                depth = int(element.tag[1]) - minimum + 1
+                clean = element.text_content().strip()
+                if auxiliary_headings:
+                    # 目录已有独立子章；父章正文的小标题仅作段内提示，不能抢占子章编号和目录位置。
+                    element.clear()
+                    element.tag = 'p'
+                    strong = lxml.html.Element('strong')
+                    strong.text = clean
+                    element.append(strong)
+                    continue
+                depth = levels.index(int(element.tag[1])) + 1
                 counters[depth] = counters.get(depth, 0) + 1
                 counters = {k: v for k, v in counters.items() if k <= depth}
-                original = element.text_content().strip()
-                from app.core.chapter_title import _PREFIX_RE
-                clean = original
-                for _ in range(3):
-                    clean = _PREFIX_RE.sub('', clean).strip()
                 numbered = _numbered_title(clean, base_level + depth, counters[depth])
                 # 导出副本统一编号；保留正文原始内容与数据库里的标题。
                 element.clear()
@@ -675,6 +692,25 @@ def _walk_block(doc, style: DocxStyle, parent, base_level: int,
     """
     # 图题是图片的附属段落，不按普通正文缩进排版。仅处理紧邻图片的明确图题，
     # 不把正文中“图：……”的普通说明误搬到别处。
+    # 只认紧邻表格的明确表题，不把章节标题或普通说明搬作表题。
+    for table in list(parent):
+        if table.tag != 'table':
+            continue
+        for candidate in (table.getprevious(), table.getnext()):
+            if candidate is None or candidate.tag != 'p':
+                continue
+            text = candidate.text_content().strip()
+            match = re.fullmatch(r'表\s*[：:]\s*(\S[^\n]{0,100})', text)
+            if not (match or candidate.get('data-table-caption') == 'true' or
+                    (len(text) <= 60 and text.endswith(('表', '模板')) and
+                     len(candidate) == 1 and candidate[0].tag in ('strong', 'b'))):
+                continue
+            for child in list(candidate):
+                candidate.remove(child)
+            candidate.text = match.group(1).strip() if match else text
+            candidate.set('data-table-caption', 'true')
+            table.addprevious(candidate)
+            break
     claimed_captions = set()
     for figure in list(parent):
         if not isinstance(figure.tag, str):
@@ -748,8 +784,16 @@ def _walk_block(doc, style: DocxStyle, parent, base_level: int,
                     caption.paragraph_format.first_line_indent = Cm(0)
                     caption.paragraph_format.line_spacing = 1.0
                     _font(caption.add_run(name), style.table_size_pt, style.body_font, color=GRAY)
+                    note=_image_source_note(marker.group(1),images)
+                    if note:
+                        _font(caption.add_run('\n'+note),style.table_size_pt,style.body_font,color=GRAY)
                 except Exception:
                     _run(p, '[图片占位：'+name+']', False, False, True)
+            elif el.get('data-table-caption') == 'true':
+                p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.keep_with_next = True
+                _font(p.add_run(el.text_content()), style.table_size_pt, style.body_font)
             elif el.get('data-figure-caption') == 'true':
                 p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
                 p.paragraph_format.first_line_indent = Cm(0)
@@ -855,7 +899,17 @@ def _lookup_name(raw: str, images) -> tuple[str, object | None]:
 
     if not isinstance(images, ProjectImages):
         images = ProjectImages(images)
-    return images.take(raw)
+    from app.services.image_caption import display_caption
+    name,path=images.take(raw)
+    return display_caption(name),path
+
+
+def _image_source_note(raw,images):
+    if '|自定义图注=1' not in raw:return ''
+    bound=re.search(r'素材ID=(IMG-[0-9a-f]{24})',raw)
+    asset=getattr(images,'assets',{}).get(bound.group(1)) if bound else None
+    if not asset or not asset.get('generated'):return ''
+    return 'AI生成示意' + ('；数据仅作示例，非实测结果' if '数据仅作示例，非实测结果' in str(asset.get('caption')) else '')
 
 
 def _lookup_raw(raw: str) -> str:
@@ -909,6 +963,8 @@ def _add_text(paragraph, style: DocxStyle, text: str, bold: bool, italic: bool, 
             try:
                 paragraph.add_run().add_picture(str(path), width=Cm(_fit_width_cm(path, style)))
                 _font(paragraph.add_run(name), style.table_size_pt, style.body_font, color=GRAY)
+                note=_image_source_note(m.group(1),images)
+                if note:_font(paragraph.add_run('\n'+note),style.table_size_pt,style.body_font,color=GRAY)
             except Exception:  # noqa: BLE001 图片损坏/格式不认，退回红字占位而不是丢图
                 _run(paragraph, f"[图片占位：{visible_name}]", bold, italic, red=True, collapse=collapse)
                 _font(paragraph.add_run(f"（{_pending_kind(_lookup_raw(m.group(1)))}）"),
@@ -932,7 +988,13 @@ def _add_inline(paragraph, style: DocxStyle, el, bold: bool = False, italic: boo
         if not isinstance(child.tag, str):
             continue
         tag = child.tag.lower()
-        if tag in ("strong", "b"):
+        if tag == 'span' and child.get('data-page-reference'):
+            identity = child.get('data-page-reference')
+            if identity.isdigit():
+                _add_field(paragraph, f' PAGEREF bc_node_{int(identity)} \\h ', style, placeholder='待更新', dirty=True)
+            else:
+                _font(paragraph.add_run('[章节引用无效]'), style.body_size_pt, style.body_font, color=WARN_RED)
+        elif tag in ("strong", "b"):
             _add_inline(paragraph, style, child, True, italic, red, collapse, images)
         elif tag in ("em", "i"):
             _add_inline(paragraph, style, child, bold, True, red, collapse, images)
@@ -995,10 +1057,25 @@ def _render_table(doc, style: DocxStyle, table_el, images: dict | None = None) -
         pass
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = True
+    explicit_widths = []
+    for cell in rows[0].findall('th') + rows[0].findall('td'):
+        value = cell.get('colwidth', '')
+        explicit_widths.append(int(value) if value.isdigit() and int(value) > 0 else 0)
+    if len(explicit_widths) == ncols and all(explicit_widths):
+        from docx.shared import Emu
+        section = doc.sections[-1]
+        available = section.page_width - section.left_margin - section.right_margin
+        total = sum(explicit_widths)
+        table.autofit = False
+        for column, width in zip(table.columns, explicit_widths):
+            column.width = Emu(int(available * width / total))
 
     for r in rows:
         cells = r.findall("th") + r.findall("td")
         row = table.add_row()
+        if len(explicit_widths) == ncols and all(explicit_widths):
+            for cell, width in zip(row.cells, explicit_widths):
+                cell.width = Emu(int(available * width / total))
         for i in range(ncols):
             cell = row.cells[i]
             p = cell.paragraphs[0]

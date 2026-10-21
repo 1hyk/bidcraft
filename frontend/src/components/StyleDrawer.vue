@@ -12,7 +12,7 @@
       <div class="st-head">
         <div>
           <div class="st-title">排版设置</div>
-          <div class="st-sub">导出 Word 时生效，只影响导出的文档，不改编辑器里的显示</div>
+          <div class="st-sub">保存后用于导出版式和生成篇幅预算；已有正文不会自动改写。</div>
         </div>
         <button class="st-close" @click="emit('update:modelValue', false)">✕</button>
       </div>

@@ -1,5 +1,6 @@
 """人员归属、章前引言预算、遗留配图占位和无效素材 ID 的回归。"""
 import sys
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,56 @@ from app.core.page_plan import allocate
 
 
 class RepairsTests(unittest.TestCase):
+    def test_explicit_table_need_reaches_completion_without_name_dictionary(self):
+        need='岗位职责表'
+        body='拟设置服务岗，负责服务协调。\n\n[图片占位：'+need+']'
+        with patch('app.services.llm.llm.chat',return_value=json.dumps({'markdown':'| 岗位 | 职责 |\n| --- | --- |\n| 服务岗 | 服务协调 |'},ensure_ascii=False)):
+            result=template_completion.complete(body,table_names=[need])
+        self.assertNotIn('[图片占位',result)
+        self.assertIn('| 服务岗 | 服务协调 |',result)
+    def test_legacy_multi_field_table_does_not_become_raster_image(self):
+        from app.services.generated_images import eligible
+        need={'name':'设备维护责任分配表','source':'material','purpose':'列明设备、责任组、巡检频次及处理时限'}
+        outline=normalize_outline({'image_needs':[need]})
+        self.assertEqual(outline['image_needs'],[])
+        self.assertEqual(outline['table_needs'][0]['name'],need['name'])
+        self.assertFalse(eligible(need))
+        real=dict(need,name='设备维护责任分配表扫描件',purpose='客户提供的签字扫描件')
+        self.assertEqual(normalize_outline({'image_needs':[real]})['image_needs'][0]['source'],'material')
+    def test_scope_intro_ignores_old_index_instructions_and_removes_only_own_title(self):
+        from app.services.writer_service import _finish_images
+        from app.agents.writer_agent import _build_context
+        ctx={'node':{'title':'技术方案'},'outline':{'chapter_title':'技术方案','_writing_role':'scope_introduction','thinking':'旧指令唯一标记：必须编制评分索引','key_points':['索引表']}}
+        prompt=_build_context(ctx['outline'],[],[],[])
+        self.assertNotIn('旧指令唯一标记',prompt)
+        self.assertEqual(_finish_images(ctx,'## 技术方案\n\n本方案说明总体安排。',1,1),'本方案说明总体安排。')
+        with self.assertRaises(ValueError):
+            _finish_images(ctx,'## 其他业务章节\n\n正文。',1,1)
+
+    def test_index_reference_is_not_missing_real_material(self):
+        from app.services.chapter_references import normalize_index
+        body='|证明材料所在页码|\n|[待补充：业务实施]|\n[待补充：人员劳动合同]\n[待补充：不存在的章节]'
+        out=normalize_index(body,['业务实施'])
+        self.assertIn('详见“业务实施”章节（页码见最终目录）',out)
+        self.assertIn('[待补充：人员劳动合同]',out)
+        self.assertIn('[待补充：不存在的章节]',out)
+        self.assertEqual(normalize_index(out,['业务实施']),out)
+
+    def test_scope_intro_does_not_accept_full_duplicate_scheme(self):
+        from app.services.writer_service import _finish_images
+        from app.agents.writer_agent import _build_context
+        ctx={'outline':{'_writing_role':'scope_introduction','_child_titles':['业务实施','质量保障']}}
+        prompt=_build_context(ctx['outline'],[],[],[])
+        self.assertIn('一至两段',prompt)
+        self.assertIn('总标题不等同于单独评分的总体实施方案',prompt)
+        self.assertEqual(_finish_images(ctx,'本方案按工作范围组织实施，具体措施见下级章节。',1,1),'本方案按工作范围组织实施，具体措施见下级章节。')
+        for body in ['文'*1000,'## 组织方案\n详细内容','| 项目 | 做法 |\n| --- | --- |']:
+            with self.subTest(body=body[:20]),self.assertRaisesRegex(ValueError,'总范围导语'):
+                _finish_images(ctx,body,1,1)
+        # 评分项对应的业务父章仍可承载紧凑索引，不按总标题规则误拒绝。
+        ordinary={'outline':{'_writing_role':'introduction'}}
+        self.assertIn('实施路径',_finish_images(ordinary,'## 实施路径\n本章索引。',1,1))
+
     def test_lowalt_report_samples_and_existing_matrix_do_not_generate_bitmap(self):
         from app.services.generated_images import eligible
         for name in ['标准化测试结果汇总表样例','问题清单跟踪表样例']:

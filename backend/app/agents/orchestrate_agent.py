@@ -3,11 +3,10 @@
 职责：招标要求/评分办法提取 → 章节覆盖检查清单 → 目录生成 → 逐章编写思路。
 
 目录装配（方案 3.2）：
-- 固定骨架 + 按本项目实际专业动态装配子目录 + 招标文件定制章节；
-- 目录模板库作参考输入，最终以用户确认为准。
+- 当前招标目录优先；无规定目录时按当前要求组织；
+- 历史素材仅用于相关章节内部的方法细化，不确定目录范围。
 
-章级骨架的来源只有三个，按优先级（2026-10-15 起，见下方注释）：招标规定的目录 >
-本领域声明的候选骨架 > 模型按项目描述自编。
+目录来源：当前招标规定的目录，或当前技术要求与评分办法；缺少依据时停止。
 """
 import json
 import re
@@ -20,54 +19,21 @@ from app.services.llm import llm
 # `requirement_agent.SUGGESTED_CHAPTERS`），内容是 11 个铁路土建章名。它们的注释写着
 # 「跨工程类型通用」，写的时候也确实通用——因为那时候只有一个领域。2026-10-15 删掉。
 #
-# 章级骨架按**固定优先级**由调用方组装，再以 `chapters` 参数传进来：
-#
-#     ① 招标文件规定的施组目录（project.toc_hint）——评标格式红线，最高
-#     ② 本领域声明的候选骨架（app/core/domains.py 的 `Domain.chapters`）
-#     ③ 都没有 → 传 None，让模型按项目描述自编
-#
-# 第 ③ 档不是"降级"：一个刚建、没传招标、语料也还没入库的项目，项目描述里那点信息
-# 比撞一张不知道哪个领域的写死章名表更靠谱。**任何一档都不许回退到别的领域**——
-# 静默跨域兜底正是这套表出问题的成因。
-#
-# 专业词表同样按领域取，本模块也不自带（调用方以 professions 参数传入）。
-
+# 目录以当前招标规定、技术要求和评分办法为依据。
+# 历史知识只在已确定章节内辅助细化，不提供固定领域章名。
 
 def _chapters_block(chapters: list[str] | None, tender_led: bool = False) -> str:
-    """章级骨架的提示词片段；没给骨架时**整段不出现**（而不是留个空标题）。
+    """兼容旧调用，不再将领域或历史样本的章名注入自动目录生成。"""
+    return ""
 
-    留空标题会让模型以为"骨架是空的"，进而自己编一套又不敢说——不如干脆不提此事。
-
-    措辞是实测调出来的（2026-10-15，项目 4 低空）：写成「参考骨架（…可增删调整）」
-    时，模型**照单全收这五章之后，又把它自己那套通用施组模板补了回来**（编制依据与原则 /
-    施工组织安排 / 资源配置 / 控制与重难点工程 / 管理措施），10 章里 5 章是没人要的。
-    那五章在低空语料里数不出任何子节，正文只能写空话。所以这里把"参考"改成了
-    "以它为准落地"，并**点名禁止**补通用模板章——补章这个动作模型自己是意识不到的。
-
-    `tender_led`：本次有没有拿到**招标要求与评分办法**。拿到了就必须换一套说法——
-    `Domain.chapters` 是**从某一份招标文件里读出来的**候选骨架（lowalt 那五支就是从
-    本项目评审办法的技术评审项抄的），它是**兜底**，不是这个领域的定律。再拿"以它为准
-    落地"去压一份新招标文件，就是把**上一份招标文件**的答案当成这一份的红线：
-    新招标要求写的内容被这五支挤掉，表现成"目录被强制收缩成五章"。
-    所以招标要求在的时候，**招标文件是唯一判据**，骨架降级为补漏参考（见
-    `TOC_TITLES_SYSTEM` 第 3 条第一种情形）。
-    """
-    if not chapters:
-        return ""
-    if tender_led:
-        return ("本领域同类标书的**实际章结构**（**仅供补漏**：本次有招标要求与评分办法，"
-                "**以它为准**——见系统提示词第 3 条第一种情形，这一份不得覆盖或压缩"
-                "招标文件点名要求的内容）："
-                + " / ".join(chapters) + "\n")
-    return ("参考骨架（本领域同类标书的**实际章结构**，以它为准落地：项目确实不涉及的可以删，"
-            "但**不要另补本领域通用模板里的章**——补出来的章没有语料支撑，正文只能是空话）："
-            + " / ".join(chapters) + "\n")
 
 # （`TOC_SYSTEM` 与 `generate_toc` 已于 2026-10-15 删除：它们是"一次调用出章+节"的旧
 #   实现，早已被下面两阶段的 `generate_toc_titles` / `generate_toc_children` 取代，
 #   全仓零调用点。留着只会继续把写死的章名表散播到更多地方。）
 
-OUTLINE_SYSTEM = """你是资深{G_FULL}编制专家，负责为指定章节生成编写思路（提纲）。
+from app.services.contact_policy import CONTACT_POLICY
+
+OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，负责为指定章节生成编写思路（提纲）。
 
 要求：
 1. 基于该章节的类型、本项目事实、可参考的历史知识页，给出该章节的编写思路；
@@ -80,6 +46,14 @@ OUTLINE_SYSTEM = """你是资深{G_FULL}编制专家，负责为指定章节生�
    history 仅在内容属于可合成示意时设 allow_generated=true，真实照片、截图、证照、
    检测报告等必须设 false；不得为获取配图而把真实材料改称概念示意。
    图表应服务于内容，不要为了配图而凑图。
+   每项补充 content_origin：proposal_design（我方拟议安排）或 external_evidence（外部真实材料）；
+   data_structure 按实际内容填写：records（记录）、assignment（岗位/班次分配）、comparison（对照）、
+   measurements（数据）、timeline（任务时间跨度）、process（流程）、hierarchy（层级）、
+   relationships（关系）、spatial_scene（空间场景）。不能只根据图名猜类型。
+   分配、记录、对照和数据内容用可编辑表格；任务跨度用甘特图；关系用 Mermaid。
+   场景插图默认按具有实物质感的拟议场景表达，visual_style=photorealistic；仅明确需要非写实空间说明时用spatial_illustration。写实质感不代表实拍证据。
+   场景插图的 prompt 明确主体、数量或相对规模、位置关系、视角、关键细节，不放整段正文，
+   不虚构具体型号或实测状态；图名在正文单独排版，不画进图片。
    没有需求就给空数组；need_image 与 image_needs 是否为空保持一致。
 
 输出 JSON 结构：
@@ -91,7 +65,7 @@ OUTLINE_SYSTEM = """你是资深{G_FULL}编制专家，负责为指定章节生�
   "refs": [{"chapter_type": "可参考的知识页类型", "usage": "引用说明"}],
   "need_table": true,
   "need_image": false,
-  "image_needs": [{"name": "图名", "purpose": "用途", "source": "mermaid|history|illustration|material", "asset_id": "history选中候选时填写原始asset_id，其他留空", "allow_generated": false, "prompt": "仅合成示意图填写画面要求"}]
+  "image_needs": [{"name": "图名", "purpose": "用途", "content_origin": "proposal_design|external_evidence", "data_structure": "records|assignment|comparison|measurements|timeline|process|hierarchy|relationships|spatial_scene", "source": "mermaid|history|illustration|material", "asset_id": "history选中候选时填写原始asset_id，其他留空", "allow_generated": false, "visual_style": "photorealistic|spatial_illustration", "prompt": "仅合成示意图填写画面要求"}]
 }"""
 
 
@@ -107,21 +81,10 @@ TOC_TITLES_SYSTEM = """你是资深{G_INTRO}编制专家，负责拟定目录的
 要求：
 1. 只输出章标题列表（不展开子节）；
 2. 【最高优先级】若提供了"招标文件规定的{G_SHORT}目录"，必须以它为骨架原样保留其章；
-3. 没有招标规定目录时，按下面三种情形之一定章：
-   - **同时给了"招标要求与评分办法"和"参考骨架"**：**以招标文件为准**。招标文件里
-     点名要写的内容（编制要求、技术要求、评审办法各评分项下要求的内容）在目录里
-     **一项都不许少**，每项都要有承载它的章（把几项并进同一章可以，"一项都不许少"
-     依然成立，只是落点是同一章）；"参考骨架"只用来补招标文件没点到的常规章，
-     **不得拿它覆盖、替换或压缩招标文件点名要求的内容**；两者对不上时一律以招标文件为准；
-   - **只给了"参考骨架"**：那是本领域同类标书的**实际章结构**，以它为准逐章落地；项目
-     确实不涉及的可以删，但**不要另补本领域通用模板里的章**（如"编制依据""资源配置"
-     "施工组织安排"这类放之四海皆准的章节）——它们在本项目语料里没有对应内容，
-     正文只能写空话，评审专家一眼看得出没按本项目编；
-   - **都没给**：照项目信息自己判断本项目该有哪几章——项目是什么、要交付什么、
-     评审办法考什么，都在项目信息里写着；
-   三种情形下**本项目里不存在的工程类型一律不要单独立章**：把别的项目才有的工程
-   写进目录，等于暴露"没按本项目编制"，比少一章更糟；
-4. 按本领域的编制惯例排序，只输出 JSON，不要解释。
+3. 没有规定目录时，根据当前招标的技术要求、工作范围、交付与验收要求及技术评分内容组织章节。
+   每项要求都必须有承接位置，可以将相关要求合并在同一章；不得套用领域固定章名。
+   不因历史材料中出现某章就新增本项目没有依据的内容；历史素材不足也不能省略本项目要求。
+4. 按当前招标明确的顺序组织，未规定顺序时按工作逻辑排列；只输出 JSON，不要解释。
 
 输出 JSON：{"chapters": [{"title": "第一章标题"}]}"""
 
@@ -133,11 +96,11 @@ TOC_CHILDREN_SYSTEM = """你是资深{G_FULL}编制专家。为目录中指定�
 2. **数量由内容决定，不要凑数**——内容单薄的章（函件、声明、单一表格）可以只有 1 节，
    甚至不分子节；内容厚的章（施工方案、技术方案）才需要展开。原先是「按惯例列 2~8 个」，
    那是明着让模型凑，任何章名都能编出两节来；
-3. 给了「同类标书中本章的子节」就**优先照它装配**——那是历史标书里实际用过的章节结构，
-   括号里的页数是它在知识库里被写到的次数，**页数越多越是行业惯例**（评审专家按惯例找内容）；
+3. 历史子节仅供方法细化参考，必须核对本次招标是否需要；出现次数不代表本项目必须设置该节。
 4. 给了「招标文件格式中列出的大项」就**必须逐一保留**（那是招标的格式红线），可以归并、
    可以在其下再分子节，但不能漏、不能改变规定大项的相对顺序；两者冲突时以招标要求为准；
-5. 结合项目实际专业，只列本项目真正需要的内容；
+5. 结合项目实际专业，只列本项目真正需要的内容；最低评审价法、综合评分法等定标方法不是技术工作章节。
+   没有技术评分项时，仍须依据技术要求、工作范围、实施与验收要求展开技术内容，不得用价格评审方法替代；
 6. 只输出 JSON，不要解释。
 
 输出 JSON：{"children": [{"title": "第X节标题"}]}"""
@@ -155,23 +118,22 @@ def _toc_context(project_info: str, professions: list[str] | None,
     return user
 
 
+def require_tender_basis(tender_requirements, tender_toc):
+    """依据不足时在模型调用和目录写入前停止，不以项目描述或历史模板代替。"""
+    from app.core.config import settings
+    from app.core.chapter_title import normalize
+    meaningful_toc = any(isinstance(c, dict) and str(c.get('title') or '').strip()
+                        and (c.get('children') or normalize(c['title']) != normalize(settings.generation_root_title or ''))
+                        for c in (tender_toc or {}).get('chapters') or [])
+    if not str(tender_requirements or '').strip() and not meaningful_toc:
+        raise ValueError('招标依据不足，未生成或替换目录。请核对招标解析原文、技术要求和评分办法后重试')
+
+
 def generate_toc_titles(project_info: str, professions: list[str] | None = None,
                         tender_requirements: str = "", tender_toc: dict | None = None,
                         chapters: list[str] | None = None, domain: str = "") -> list[dict]:
-    """阶段一：只生成章级骨架（快，先让用户看到目录轮廓）。
-
-    `chapters`：章级骨架候选，由调用方按上面那个三级优先级组装好再传进来
-    （`compile_graph.node_generate_toc` 是唯一调用点）。**没传＝第三档**，让模型照
-    项目信息自己判断该有哪几章——此处刻意不设任何写死的兜底章名表：一张不知道属于
-    哪个领域的章名表，比模型看着项目描述编还差（2026-10-15，见模块顶部注释）。
-
-    招标规定了目录时（`tender_toc`）调用方**不该再传 chapters**：招标骨架是红线，
-    再给一份领域参考只会让模型在两者之间摇摆。
-
-    有招标要求（`tender_requirements`）时，`chapters` 降级成**补漏参考**
-    （`tender_led=True`）——`Domain.chapters` 是从某一份招标文件里读出来的候选骨架，
-    拿它给另一份招标文件"以它为准落地"，正是"目录被强制收缩"的成因。见 `_chapters_block`。
-    """
+    """只根据当前招标目录、技术要求和评分办法生成；chapters旧参数不再生效。"""
+    require_tender_basis(tender_requirements, tender_toc)
     from app.core.config import settings
     from app.core.generation_scope import select_roots
 
@@ -184,7 +146,6 @@ def generate_toc_titles(project_info: str, professions: list[str] | None = None,
         return [{"title": specified[0]["title"] if specified else scope}]
 
     user = _toc_context(project_info, professions, tender_requirements, tender_toc)
-    user += _chapters_block(chapters, tender_led=bool((tender_requirements or "").strip()))
     user += "\n请生成章级骨架（只列章标题）。"
     raw = llm.chat(
         [
@@ -286,11 +247,8 @@ def generate_toc_children(chapter_title: str, project_info: str,
     """
     specified = _tender_children(tender_toc, chapter_title)
     skel = skeleton or []
-    # 招标真规定了子节、知识库又没给出惯例 → 照抄，一次模型都不调（最忠实也最便宜）。
-    # **但知识库有骨架时不能直接照抄**：本项目的招标「附件2 响应文件格式」是平铺的
-    # 九个章名，`toc_hint` 里那些子节是抽取模型自己推的，照抄等于把一次推演固化成
-    # 招标规定；而知识库骨架恰恰对得上评审办法。两者都摆给模型，让它择优合并。
-    if specified and not skel:
+    # 当前招标已规定子节时直接保留，历史结构不能改变其顺序或数量。
+    if specified:
         return specified
     prof = professions or []
     user = (
@@ -299,6 +257,7 @@ def generate_toc_children(chapter_title: str, project_info: str,
         + (f"招标要求与评分办法：\n{tender_requirements}\n" if tender_requirements else "")
     )
     if skel:
+        user += "历史子节仅供本章方法细化参考，不得为迁就历史资料增加无关章节或改变招标要求。\n"
         rules = "、".join(f"{s['name']}（{s['pages']}页）" for s in skel)
         user += f"同类标书中本章的子节（页数=该子节在知识库里被写到的次数，多者为惯例）：\n{rules}\n"
     if specified:

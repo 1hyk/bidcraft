@@ -1,5 +1,6 @@
 <template>
-  <el-drawer :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)" title="检查与补全" size="min(1440px, 98vw)" :close-on-click-modal="false" :show-close="!showFill" :close-on-press-escape="!showFill">
+  <section class="proposal-check-page" aria-label="检查与导出">
+    <header class="check-heading"><div><span>定稿准备</span><h2>检查、补全与导出</h2><p>核对技术响应和真实材料，修改后复查，最后导出排版文件。</p></div><el-button @click="emit('back')">收起检查</el-button></header>
     <p class="note">先查问题，再按来源补全或修改正文，处理后复查。条款核验需手动启动；补全不会自动把要求标为通过。</p>
     <div class="actions">
       <el-button :disabled="busy || reviewing || writing" @click="openFill()">从公司资料补全</el-button>
@@ -14,9 +15,18 @@
           <el-button type="primary" :loading="reviewing" :disabled="busy || !assessment?.items?.length" @click="review">{{ assessment?.has_assessment ? '重新核验条款' : '开始核验条款' }}</el-button>
         </div>
         <p class="note">{{ assessment?.note }}</p>
+        <details v-if="compilationItems.length" class="source-details">
+          <summary>编制与排版提醒（{{ compilationItems.length }} 条，不计入正文缺项）</summary>
+          <section v-for="item in compilationItems" :key="item.requirement_id">
+            <strong>{{ item.title }}</strong>
+            <p>{{ item.content }}</p>
+            <p class="note">{{ item.gap }}</p>
+            <a v-if="item.source_document" :href="item.source_document.url" :download="item.source_file">下载招标原文件核对附件</a>
+          </section>
+        </details>
         <el-alert v-if="assessment?.has_assessment && !assessment.fresh" type="warning" title="内容、编制设置或检查规则已变化，上次结果已过期。请重新核验；旧证据不作为当前依据。" :closable="false" />
         <p v-if="assessment?.checked_at" class="note">上次核验：{{ new Date(assessment.checked_at).toLocaleString() }} · {{ assessment.fresh ? '与当前保存版本一致' : '已过期' }}</p>
-        <p v-if="assessment?.summary">共 {{ assessment.summary.total }} 条 · 找到响应证据 {{ assessment.summary.covered }} · 部分响应 {{ assessment.summary.partial }} · 未找到证据 {{ assessment.summary.missing }} · 未完成核验 {{ assessment.summary.unverified }}（其中核验失败 {{ assessment.summary.review_errors || 0 }}）</p>
+        <p v-if="assessment?.summary">共 {{ assessment.summary.total }} 条 · 正文义务覆盖 {{ assessment.summary.covered }} · 部分响应 {{ assessment.summary.partial }} · 未找到证据 {{ assessment.summary.missing }} · 待最终环节核对 {{ assessment.summary.pending_stage || 0 }} · 未完成核验 {{ assessment.summary.unverified }}（其中核验失败 {{ assessment.summary.review_errors || 0 }}）</p>
         <div class="filters">
           <el-select v-model="status" placeholder="全部状态" clearable aria-label="按响应状态筛选"><el-option v-for="(label,key) in labels" :key="key" :label="label" :value="key" /></el-select>
           <el-select v-model="category" placeholder="全部类别" clearable aria-label="按要求类别筛选"><el-option v-for="name in categories" :key="name" :label="name" :value="name" /></el-select>
@@ -69,10 +79,18 @@
               <div class="comparison-result">
                 <strong>{{ item.review_state === 'error' ? '核验情况' : '核对意见与下一步' }}</strong>
                 <p>{{ item.gap || '未返回具体缺项；请结合左侧要求与右侧措施核对完整性。' }}</p>
+                <p v-for="check in item.artifact_checks || []" :key="check.quote" class="note">{{check.status === 'verified' ? '当前导出页码已核对' : '最终文件待核对'}}：{{ check.quote }}。{{ check.note }}</p>
+                <ul v-if="item.obligations?.length">
+                  <li v-for="part in item.obligations" :key="part.obligation_id">
+                    <strong>{{ stageLabels[part.stage] }} · {{ obligationStatus[part.status] || '待核对' }}</strong>：{{ part.quote }}
+                    <p v-if="part.gap" class="note">{{ part.gap }}</p>
+                  </li>
+                </ul>
+                <p v-if="item.compilation_notes?.length" class="note">本条另含编制或排版指引：{{ item.compilation_notes.join(' ') }} 此部分应核对附件与导出，不以正文声明判断。</p>
                 <ul v-if="item.missing_points?.length"><li v-for="point in item.missing_points" :key="point">未充分响应的要求：{{ point }}</li></ul>
                 <p v-if="relatedIssues(item).length" class="note">另有关联待处理事项 {{ relatedIssues(item).length }} 条，仅在“问题处理”中统计，不因此自动降低覆盖结论。</p>
                 <el-button v-if="relatedIssues(item).length" size="small" @click="showRelated(item)">查看关联待处理事项</el-button>
-                <p class="note">{{ item.review_state === 'error' ? '本条尚无有效核验结论。请先核对原文与正文，或重试核验；此状态不表示正文缺项。' : item.status === 'unverified' ? '请先核验或人工对照，再决定是否修改正文。' : item.status === 'missing' ? '本次候选中未找到证据，请先核对全文；不要直接重生成。' : item.status === 'partial' ? '请核对列出的具体不足，优先局部修改；真实证明缺失不能靠重生成解决。' : '已找到响应证据，请人工确认内容充分且承诺准确；无需仅因关联事项重生成整章。' }}</p>
+                <p class="note">{{ item.review_state === 'error' ? '本条尚无有效核验结论。请先核对原文与正文，或重试核验；此状态不表示正文缺项。' : item.status === 'unverified' ? '请先核验或人工对照，再决定是否修改正文。' : item.status === 'pending_stage' ? '正文范围已核对，最终导出、递交或真实材料仍须按列出的义务检查；当前不能判为整项完全满足，无需为此重生成正文。' : item.status === 'missing' ? '本次候选中未找到证据，请先核对全文；不要直接重生成。' : item.status === 'partial' ? '请核对列出的具体不足，优先局部修改；真实证明缺失不能靠重生成解决。' : '正文义务已逐项取得证据，请人工确认措施充分且承诺准确；这不等于外部事实或最终文件已经验收。' }}</p>
                 <el-button size="small" :disabled="busy || reviewing" :loading="reviewing" @click="review">重新核验技术要求</el-button>
               </div>
             </div>
@@ -82,35 +100,79 @@
       <el-tab-pane label="问题处理" name="issues">
         <p v-if="linkedIssues !== null" class="note">当前仅显示所选技术要求关联的事项。<el-button link @click="linkedIssues=null">显示全部问题</el-button></p>
         <el-button :loading="busy" :disabled="reviewing" @click="load">刷新缺项</el-button>
-        <p v-if="report">检查 {{ report.chapters }} 节，待补资料／待确认 {{ report.pending_facts }} 处、待补图 {{ report.pending_images }} 处。</p>
+        <el-switch v-model="showHandled" active-text="查看已处理事项" aria-label="查看已处理事项" />
+        <p class="note">待处理 {{ report?.issues?.length || 0 }} 条，已处理 {{ report?.handled_issues?.length || 0 }} 条。定位修改、保存后刷新；需人工核对的事项可确认通过，不改变技术条款核验结论。</p>
+        <p v-if="report">检查 {{ report.chapters }} 节，当前待处理 {{ report.issues?.length || 0 }} 条：{{ issueSummary }}。此统计包含图片核对等事项，不仅统计待补占位。</p>
         <div class="filters"><el-select v-model="issueKind" clearable placeholder="全部问题类型"><el-option v-for="(label,key) in issueGroups" :key="key" :label="label" :value="key" /></el-select></div>
         <el-table :data="filteredIssues" empty-text="当前筛选未发现规则问题，仍须人工审核">
           <el-table-column prop="chapter" label="章节" width="170" />
           <el-table-column prop="message" label="问题" min-width="200" />
-          <el-table-column prop="excerpt" label="对应内容" min-width="220" />
+          <el-table-column label="对应内容" min-width="220"><template #default="{row}"><strong>{{ row.excerpt }}</strong><p v-if="row.context" class="note">{{ row.context }}</p></template></el-table-column>
           <el-table-column label="处理方式" min-width="220"><template #default="{row}">
             <p class="note">{{ issueAdvice(row) }}</p>
-            <el-button v-if="canUseCompany(row)" link type="primary" :disabled="writing" @click="openFill(row.node_id)">查公司资料</el-button>
+            <p v-if="row.workflow_note" class="note">{{ row.workflow_note }}</p>
+            <p v-if="row.resolution" class="note">{{ actionLabel(row.resolution.action) }}：{{ row.resolution.note }} · {{ new Date(row.resolution.checked_at).toLocaleString() }}</p>
+            <template v-if="!row.resolution">
+              <el-button v-if="reviewKinds.has(row.kind)" link type="primary" :disabled="busy || writing" @click="handleIssue(row,'confirmed')">人工确认通过</el-button>
+              <span v-else class="note">实际缺项请定位修改后刷新检查，无需手动点通过。</span>
+            </template>
+            <el-button v-else link :disabled="busy || writing" @click="handleIssue(row,'reopen')">重新打开</el-button>
             <el-button v-if="row.kind === 'pagination'" link type="primary" @click="emit('pages')">查看页数</el-button>
           </template></el-table-column>
-          <el-table-column label="定位" width="90"><template #default="{row}"><el-button v-if="row.node_id" link type="primary" @click="go(row.node_id)">打开章节</el-button></template></el-table-column>
+          <el-table-column label="定位" width="110"><template #default="{row}"><el-button v-if="row.node_id" link type="primary" @click="go(row.node_id,row.excerpt,row.asset_id)">定位正文</el-button></template></el-table-column>
         </el-table>
+        <details v-if="report?.resolution_history?.length">
+          <summary>查看人工处理记录（{{ report.resolution_history.length }} 条，含历史版本）</summary>
+          <el-table :data="report.resolution_history.slice().reverse()">
+            <el-table-column prop="chapter" label="章节" width="170" />
+            <el-table-column prop="excerpt" label="当时内容" min-width="180" />
+            <el-table-column label="操作" width="170"><template #default="{row}">{{ actionLabel(row.action) }}<span v-if="row.workflow_status"> · {{ row.workflow_status==='completed' ? '当前正文已完成操作' : '待操作后复查' }}</span></template></el-table-column>
+            <el-table-column prop="note" label="处理说明" min-width="200" />
+            <el-table-column label="配图变化" min-width="180"><template #default="{row}"><p v-if="row.asset_id">原素材：{{ row.asset_id }}</p><p v-if="row.replacement_asset_ids?.length">新引用：{{ row.replacement_asset_ids.join('、') }}</p></template></el-table-column>
+            <el-table-column label="时间" width="170"><template #default="{row}">{{ new Date(row.checked_at).toLocaleString() }}</template></el-table-column>
+            <el-table-column label="返回问题处理" width="160"><template #default="{row}">
+              <el-button v-if="currentHandled(row)" link type="primary" :disabled="busy || writing" @click="restoreIssue(currentHandled(row))">恢复待处理</el-button>
+              <span v-else class="note">{{ currentActive(row) ? '已在待处理清单' : '历史版本，当前未检出同项' }}</span>
+            </template></el-table-column>
+          </el-table>
+        </details>
       </el-tab-pane>
     </el-tabs>
-  </el-drawer>
+    <footer class="check-footer"><span>核验结果辅助人工审查；导出文件仍须核对页码、图表和承诺。</span><el-button type="primary" :disabled="!canExport || writing || busy || reviewing || showFill" :loading="exporting" @click="emit('export')">导出 Word</el-button></footer>
   <CompanyFillDrawer v-model="showFill" :project-id="projectId" :node-id="fillNode" @changed="filled" />
+  </section>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { checkProposal, reviewProposal, proposalRequirements, getCompanyProfile, fileSections, fileSectionContent, locateRequirementSource } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { checkProposal, resolveProposalIssue, reviewProposal, proposalRequirements, getCompanyProfile, fileSections, fileSectionContent, locateRequirementSource } from '../api'
 import CompanyFillDrawer from './CompanyFillDrawer.vue'
 import { reviewMarkup } from '../reviewMarkup'
-const props = defineProps({ modelValue: Boolean, projectId: [String, Number], nodeId: [String, Number], writing: Boolean })
-const emit = defineEmits(['update:modelValue', 'locate', 'changed', 'company', 'pages', 'source'])
+const props = defineProps({ modelValue: Boolean, projectId: [String, Number], nodeId: [String, Number], writing: Boolean, canExport:Boolean, exporting:Boolean })
+const emit = defineEmits(['update:modelValue', 'locate', 'changed', 'company', 'pages', 'source', 'back', 'export'])
 const showFill=ref(false), fillNode=ref(null), company=ref(null), issueKind=ref('')
 const linkedIssues=ref(null)
+const showHandled=ref(false)
+const currentHandled=row=>(report.value?.handled_issues || []).find(i=>i.issue_id===row.issue_id && i.fingerprint===row.fingerprint && i.resolution?.checked_at===row.checked_at)
+const currentActive=row=>(report.value?.issues || []).some(i=>i.issue_id===row.issue_id && i.fingerprint===row.fingerprint)
+async function restoreIssue(row){
+  await handleIssue(row,'reopen')
+  if(currentActive(row)){showHandled.value=false;issueKind.value='';linkedIssues.value=null;tab.value='issues'}
+}
+const reviewKinds=new Set(['image_review','claim_review','person_role_review','structure_review'])
+const actionLabel=a=>({confirmed:'人工确认可用／依据充分',false_positive:'人工确认误报',not_applicable:'旧版不适用（需重新处理）',reopen:'重新打开',replace_requested:'替换图片',remove_requested:'移除图片',edit_requested:'修改正文后复查'})[a] || a
+async function handleIssue(row,action){
+  const project=props.projectId
+  try {
+    const {value}=await ElMessageBox.prompt('请填写核对依据或处理说明。人工确认不会修改正文，也不会改变条款核验结论。','记录处理结果',{inputType:'textarea',inputValidator:v=>!!v?.trim() || '请填写说明'})
+    if(project!==props.projectId)return
+    busy.value=true
+    const {data}=await resolveProposalIssue(project,{issue_id:row.issue_id,fingerprint:row.fingerprint,action,note:value})
+    if(project===props.projectId){report.value=data;linkedIssues.value=null;ElMessage.success('处理记录已保存')}
+  } catch(e){if(e!=='cancel' && e!=='close')error(e)}
+  finally{if(project===props.projectId)busy.value=false}
+}
 const usableFacts=computed(()=>(company.value?.entries || []).filter(f=>f.confirmed && !f.expired && !f.conflict && (!f.doc_id || f.source_status==='extracted')).length)
 const pendingFacts=computed(()=>(company.value?.entries || []).filter(f=>f.status==='pending').length)
 const sources = ref({})
@@ -144,8 +206,9 @@ async function readSource(item,id) {
   } catch(e){if(project===props.projectId && sourceState(item).selected===id)sources.value[item.requirement_id]={...sourceState(item),loading:false,error:'原文读取失败，可重新选择章节重试。'} }
 }
 
-const issueGroups={missing_evidence:'待补资料与项目安排',claim_review:'事实与承诺核对',person_role_review:'人员归属',images:'图片',pagination:'页数',other:'正文与其他'}
+const issueGroups={missing_evidence:'待补资料与项目安排',claim_review:'事实与承诺核对',person_role_review:'姓名、电话与人员核对',images:'图片',pagination:'页数',other:'正文与其他'}
 const groupOf=k=>k?.includes('image')?'images':issueGroups[k]?k:'other'
+const issueSummary=computed(()=>Object.entries(issueGroups).map(([key,label])=>[label,(report.value?.issues || []).filter(i=>groupOf(i.kind)===key).length]).filter(([,count])=>count).map(([label,count])=>`${label} ${count} 条`).join('，') || '未检出待处理规则问题，仍须人工审核')
 function relatedIssues(item){
   if(!assessment.value?.fresh)return []
   return (report.value?.issues || []).filter(row=>(item.evidence || []).some(e=>{
@@ -159,7 +222,7 @@ function relatedIssues(item){
   }))
 }
 function showRelated(item){linkedIssues.value=relatedIssues(item);issueKind.value='';tab.value='issues'}
-const filteredIssues=computed(()=>(linkedIssues.value ?? report.value?.issues ?? []).filter(r=>!issueKind.value || groupOf(r.kind)===issueKind.value))
+const filteredIssues=computed(()=>(showHandled.value ? report.value?.handled_issues ?? [] : linkedIssues.value ?? report.value?.issues ?? []).filter(r=>!issueKind.value || groupOf(r.kind)===issueKind.value))
 function canUseCompany(row){return row.kind==='missing_evidence' && /资质|证书|姓名|业绩|公司|本单位|设备型号|真实材料/.test(row.excerpt || '')}
 function issueAdvice(row){
   const kind=row.kind
@@ -175,15 +238,18 @@ function openFill(id){ if(props.writing)return; fillNode.value=id || props.nodeI
 async function filled(id){emit('changed',id);await load();ElMessage.info('正文已更新，问题清单已刷新；条款核验需重新运行')}
 const busy = ref(false), reviewing = ref(false), report = ref(null), assessment = ref(null)
 const tab = ref('requirements'), status = ref(''), category = ref(''), search = ref('')
-const labels = { covered: '找到响应证据，待复核', partial: '部分响应', missing: '未找到证据', unverified: '尚未取得核验结论', not_applicable: '需在其他文件核查' }
+const labels = { covered: '正文义务覆盖，待复核', partial: '部分响应', missing: '未找到证据', pending_stage:'待最终环节核对', unverified: '尚未取得核验结论', not_applicable: '需在其他文件核查' }
+const stageLabels={body:'正文',export:'最终导出',submission:'递交前',external_evidence:'真实证明'}
+const obligationStatus={covered:'有响应证据',partial:'部分响应',missing:'未找到证据',unverified:'核验未完成',pending_stage:'待该环节核对'}
 const tagType = s => ({ covered: 'primary', partial: 'warning', missing: 'danger', unverified: 'info', not_applicable: 'info' }[s] || 'info')
-const technicalItems = computed(() => (assessment.value?.items || []).filter(i=>i.response_scope !== 'other_documents'))
+const technicalItems = computed(() => (assessment.value?.items || []).filter(i=>i.response_scope === 'technical'))
+const compilationItems = computed(() => (assessment.value?.items || []).filter(i=>i.response_scope === 'compilation_check'))
 const categories = computed(() => [...new Set(technicalItems.value.map(i => i.category))])
 const filtered = computed(() => technicalItems.value.filter(i =>
   (!status.value || i.status === status.value) && (!category.value || i.category === category.value) &&
   (!search.value.trim() || `${i.title} ${i.content} ${i.gap}`.includes(search.value.trim()))))
 let requestVersion = 0
-async function go(id) {
+async function go(id,excerpt='',asset_id='') {
   try {
     const { data } = await proposalRequirements(props.projectId)
     if (assessment.value?.fresh && (!data.fresh || data.signature !== assessment.value.signature || data.requirements_signature !== assessment.value.requirements_signature)) {
@@ -191,7 +257,7 @@ async function go(id) {
       ElMessage.warning('正文或要求已变化，请重新核验后查看当前证据')
       return
     }
-    emit('update:modelValue', false); emit('locate', Number(id))
+    emit('locate', excerpt || asset_id ? {node_id:Number(id),excerpt,asset_id} : Number(id))
   } catch (e) { error(e) }
 }
 const error = e => ElMessage.error(e?.response?.data?.detail || e.message)
@@ -229,6 +295,14 @@ watch(() => [props.modelValue, props.projectId], ([open, project], previous) => 
 </script>
 
 <style scoped>
+.proposal-check-page { flex:1;min-width:0;overflow:auto;padding:28px;background:#fff; }
+.check-heading { display:flex;justify-content:space-between;gap:20px;margin-bottom:22px; }
+.check-heading h2 { margin:6px 0 10px;color:#24334b;font-size:24px; }
+.check-heading span { font-size:12px;color:#526d9e; }.check-heading p { color:#64748b;margin:0;line-height:1.7; }
+.check-footer { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 0;border-top:1px solid #e5eaf1;margin-top:24px; }
+.check-footer span { font-size:13px;color:#64748b; }
+@media(max-width:900px){.proposal-check-page{padding:18px}.check-footer,.check-heading{flex-wrap:wrap}}
+
 .actions,.filters { display:flex;gap:10px;margin:12px 0;flex-wrap:wrap }
 .filters .el-select { width:200px }.filters .el-input { flex:1;min-width:180px }
 .note,.source { color:var(--text-2);font-size:12px;line-height:1.7 }

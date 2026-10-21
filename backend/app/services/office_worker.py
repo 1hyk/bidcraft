@@ -40,6 +40,11 @@ def main():
             indexes = doc.getDocumentIndexes()
             for n in range(indexes.Count): indexes.getByIndex(n).update()
             doc.getTextFields().refresh()
+        out = Path(output_dir)
+        doc.storeToURL((out/'document.docx').resolve().as_uri(),
+                       (prop('FilterName', 'Office Open XML Text'), prop('Overwrite', True)))
+        doc.storeToURL((out/'document.pdf').resolve().as_uri(),
+                       (prop('FilterName', 'writer_pdf_Export'), prop('Overwrite', True)))
         cursor = doc.CurrentController.getViewCursor()
         pages = {}
         for name in ('_bc_body_start', '_bc_body_end'):
@@ -47,11 +52,6 @@ def main():
                 raise RuntimeError('文档缺少正文分页标记，不能将总页数冒充正文页数')
             cursor.gotoRange(doc.Bookmarks.getByName(name).Anchor, False)
             pages[name] = cursor.getPage()
-        out = Path(output_dir)
-        doc.storeToURL((out/'document.docx').resolve().as_uri(),
-                       (prop('FilterName', 'Office Open XML Text'), prop('Overwrite', True)))
-        doc.storeToURL((out/'document.pdf').resolve().as_uri(),
-                       (prop('FilterName', 'writer_pdf_Export'), prop('Overwrite', True)))
         result = {'body_start': pages['_bc_body_start'], 'body_end': pages['_bc_body_end'],
                   'body_pages': pages['_bc_body_end'] - pages['_bc_body_start'] + 1,
                   'toc_updated': indexes.Count > 0, 'engine': 'LibreOffice'}

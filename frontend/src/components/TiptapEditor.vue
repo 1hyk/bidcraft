@@ -56,8 +56,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
+import { findIssueRange, findImageIssue } from '../locateIssue'
 import { Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Paragraph from '@tiptap/extension-paragraph'
@@ -73,12 +74,15 @@ import TableHeader from '@tiptap/extension-table-header'
 import { marked } from 'marked'
 import { VueNodeViewRenderer } from '@tiptap/vue-3'
 import MermaidView from './MermaidView.vue'
+import {MaterialImage,materializeImages} from '../materialImages'
+import {PageReference} from '../pageReference'
 import { uploadEditorImage } from '../api'
 
 // Mermaid 图块节点：code 存源码（data-code），NodeView 内渲染 SVG / 编辑源码。
 // 序列化为 <div class="mermaid-block" data-code="...">，与 markdown ```mermaid 双向转换。
 const Mermaid = Node.create({
   name: 'mermaid',
+  addOptions() { return {projectId:null,nodeId:null,onChanged:null} },
   group: 'block',
   atom: true,
   addAttributes() {
@@ -104,6 +108,7 @@ const Mermaid = Node.create({
 const props = defineProps({
   modelValue: { type: String, default: '' },  // markdown 内容
   saving: { type: Boolean, default: false },
+  nodeId: { type: Number, default: null },
   projectId: { type: Number, default: null }, // 图表嵌入/插入选择器用
   // 工作台正文场景：是否显示"生成本章"，以及是否正 AI 生成中（生成中禁自动保存，避免覆盖 AI 流式内容）
   canGenerate: { type: Boolean, default: false },
@@ -122,13 +127,27 @@ const editor = useEditor({
           default: false,
           parseHTML: element => element.getAttribute('data-figure-caption') === 'true',
           renderHTML: attrs => attrs.figureCaption ? { 'data-figure-caption': 'true' } : {},
+        }, tableCaption: {
+          default: false,
+          parseHTML: element => element.getAttribute('data-table-caption') === 'true',
+          renderHTML: attrs => attrs.tableCaption ? { 'data-table-caption': 'true', style: 'text-align: center' } : {},
         } }
       },
     }),
     TextStyle,
     Color,
     Highlight.configure({ multicolor: true }),
-    Mermaid,
+    Mermaid.configure({projectId:props.projectId,nodeId:props.nodeId,onChanged:()=>nextTick(()=>{
+      if(props.generating || props.externalLocked)return
+      dirtyForExternalEdit=true
+      emit('save',editor.value?.getHTML() || '',true)
+    })}),
+    PageReference.configure({projectId:props.projectId}),
+    MaterialImage.configure({projectId:props.projectId,nodeId:props.nodeId,onChanged:()=>nextTick(()=>{
+      if(props.generating || props.externalLocked)return
+      dirtyForExternalEdit=true
+      emit('save',editor.value?.getHTML() || '',true)
+    })}),
     Image.configure({ inline: false, allowBase64: false }),
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     Table.configure({ resizable: true }),
@@ -180,11 +199,11 @@ async function handlePasteImage(file) {
 //   用户清除 mark 后保存的纯文本 token 重开保持不红（清除持久）；真实 <mark> 在重开时照常显示。
 function markdownToHtml(md) {
   if (!md) return '<p></p>'
-  if (/^\s*</.test(md)) return normalizeFigureCaptions(unwrapStrikethrough(md))
+  if (/^\s*</.test(md)) return materializeImages(normalizeFigureCaptions(unwrapStrikethrough(md)))
   try {
-    return normalizeFigureCaptions(wrapTdzAsMark(
+    return materializeImages(normalizeFigureCaptions(wrapTdzAsMark(
       mermaidBlocksToNodes(unwrapBlockquotes(marked.parse(protectTilde(md)))),
-    ))
+    )))
   } catch {
     return '<p></p>'
   }
@@ -193,6 +212,19 @@ function markdownToHtml(md) {
 function normalizeFigureCaptions(html) {
   const root = document.createElement('div')
   root.innerHTML = html
+  for (const table of root.querySelectorAll('table')) {
+    for (const candidate of [table.previousElementSibling, table.nextElementSibling]) {
+      if (!candidate || candidate.tagName !== 'P') continue
+      const text = candidate.textContent.trim()
+      const match = text.match(/^表\s*[：:]\s*(\S[^\n]{0,100})$/)
+      if (!match && candidate.dataset.tableCaption !== 'true' && !(text.length <= 60 && /(?:表|模板)$/.test(text) && candidate.children.length === 1 && ['STRONG','B'].includes(candidate.children[0].tagName))) continue
+      if (match) candidate.textContent = match[1].trim()
+      candidate.dataset.tableCaption = 'true'
+      candidate.style.textAlign = 'center'
+      table.before(candidate)
+      break
+    }
+  }
   for (const figure of root.querySelectorAll('div.mermaid-block, img')) {
     const block = figure.parentElement?.tagName === 'P' ? figure.parentElement : figure
     for (const candidate of [block.nextElementSibling, block.previousElementSibling]) {
@@ -394,7 +426,24 @@ function save() {
   emit('save', html, false)
 }
 
-defineExpose({prepareExternalEdit(){
+defineExpose({locateIssue(target){
+  const ed=editor.value
+  const issue=typeof target==='string' ? {excerpt:target} : target
+  const range=ed && (issue.asset_id ? findImageIssue(ed.state.doc,issue) : findIssueRange(ed.state.doc,issue.excerpt) || findImageIssue(ed.state.doc,issue))
+  if(!range)return false
+  if(range.image)ed.chain().focus().setNodeSelection(range.from).scrollIntoView().run()
+  else ed.chain().focus().setTextSelection(range).scrollIntoView().run()
+  requestAnimationFrame(()=>{
+    if(ed.isDestroyed)return
+    const node=range.image ? ed.view.nodeDOM(range.from) : ed.view.domAtPos(range.from).node
+    if(!node)return
+    const element=node.nodeType===3 ? node.parentElement : node
+    element?.scrollIntoView?.({block:'center',inline:'nearest'})
+    if(range.image && ['replace_requested','remove_requested'].includes(issue.operation))
+      ed.extensionManager.extensions.find(e=>e.name==='materialImage')?.options.pendingActions.set(range.from,issue.operation)
+  })
+  return true
+},prepareExternalEdit(){
   clearTimeout(autoTimer)
   return {html:editor.value?.getHTML() || '', dirty:dirtyForExternalEdit}
 }})
@@ -416,6 +465,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.editor-content :deep(.ProseMirror-selectednode) { outline: 3px solid #e6a23c; outline-offset: 3px; }
 .tiptap-editor { display: flex; flex-direction: column; height: 100%; }
 
 /* 生成中只读态：工具栏禁用点击、正文不可选中（setEditable 已关，双保险） */

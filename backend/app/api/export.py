@@ -13,10 +13,30 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from app.services.docx_export import export_project_docx
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+
+class IssueResolution(BaseModel):
+    issue_id: str = Field(min_length=64, max_length=64)
+    fingerprint: str = Field(min_length=64, max_length=64)
+    action: str
+    note: str = Field(min_length=1, max_length=1000)
+
+
+@router.post('/{project_id}/issues/resolve')
+def resolve_issue(project_id: int, body: IssueResolution):
+    from app.core.database import query_one
+    from app.services.issue_resolution import resolve
+    if not query_one('SELECT id FROM project WHERE id=%s', (project_id,)):
+        raise HTTPException(404, '项目不存在')
+    try:
+        return resolve(project_id, **body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get('/{project_id}/check')
@@ -45,6 +65,15 @@ def requirement_matrix(project_id: int):
         raise HTTPException(404,'项目不存在')
     from app.services.requirement_matrix import matrix
     return matrix(project_id)
+
+
+@router.get('/{project_id}/scoring-index')
+def scoring_index(project_id: int):
+    from app.core.database import query_one
+    from app.services.scoring_index import project_index
+    if not query_one('SELECT id FROM project WHERE id=%s', (project_id,)):
+        raise HTTPException(404, '项目不存在')
+    return {'entries': project_index(project_id)}
 
 
 @router.post("/{project_id}/docx")

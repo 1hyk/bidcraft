@@ -62,7 +62,7 @@
             </div>
             <div v-if="form.target_pages" class="pg-card-row">
               <span>期望页数范围（±15%）</span>
-              <b class="num">{{ Math.ceil(form.target_pages * 0.85) }}–{{ Math.floor(form.target_pages * 1.15) }} 页</b>
+              <b class="num">{{ Math.ceil(form.target_pages * (1-tolerance)-1e-8) }}–{{ Math.floor(form.target_pages * (1+tolerance)+1e-8) }} 页</b>
             </div>
           </div>
         </div>

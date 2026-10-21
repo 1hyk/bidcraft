@@ -64,6 +64,10 @@ WRITER_SYSTEM = """你是资深{G_INTRO}编制专家，负责撰写章节正文�
    拟配置、拟执行；只有招标明确要求的真实证明、身份、资质、业绩或实测数据缺失才标注 [待补充：具体材料]；
    普通组织安排用岗位、职责和工作机制写完整，不强求姓名。
    对招标硬性指标可写明确响应承诺，同时说明落实路径；不得把承诺伪装成已测实绩。
+   参数须区分来源：招标明确数值必须准确响应；招标未规定的并发规模、资源利用率、容量、
+   时延等测试参数，不得随意填入通用阈值冒充要求，也不得机械留“具体数量”占位让用户补。
+   此时应完整说明负载递增、观测指标、规模确定依据及判定流程。
+   确实依赖外部事实且不能用实施方法解决时，才列出需确认项，并说明信息提供方、用途及影响。
    必须保持主体归属：采购方/客户联系人不得写成我方项目经理或技术负责人；
    招标文件要求提供的设备、资源、人员，不等于我方已有。归属不明时不指定实名人员。
 4. 输出 Markdown 正文，段落结构清晰；标题用 ## 三级起（正文内的小节用 ###）。
@@ -136,11 +140,18 @@ def _build_context(outline: dict, facts: list[dict], knowledge: list[dict], sibl
     parts = []
     from app.services.evidence_roles import ROLE_RULE
     parts.append(ROLE_RULE)
-    if outline.get("_writing_role") == "introduction":
+    if outline.get('_writing_role') == 'scope_introduction':
+        parts.append('【总范围节点职责】当前节点是整份文件的总标题，其下已有独立业务章节。'
+                     '仅写150至300字、一至两段的导语，交代工作范围、总体原则及下文安排。'
+                     '不设小标题、不做响应索引表、不安排图片、不重复子章节的详细措施。'
+                     '原文要求的详细方案和证明安排由实际业务章节承载；总标题不等同于单独评分的总体实施方案。')
+        if outline.get('_child_titles'):
+            parts.append('【下级业务章节】\n'+'\n'.join(outline['_child_titles']))
+    elif outline.get("_writing_role") == "introduction":
         parts.append("【节点职责】本节点已有独立子章节，只写约300字的章前引言与子章节衔接。"
                      "不得展开子章节的详细方案，不列详细资源表，不安排图片或Mermaid；"
                      "若本章承担响应汇总职责，可用紧凑索引表逐项关联子章节，不能用其他均满足略过要求；"
-                     "所有具体流程、阶段、人员、参数及图表由对应子章节承载。")
+                     "所有具体流程、阶段、人员、参数及图表由对应子章节承载。响应索引直接引用实际子章节名称，页码见最终目录；不得把章节引用或尚未分页写成待补充资料。真实证明材料缺失仍须明确标注。")
         if outline.get('_child_titles'):
             parts.append('【实际子章节（汇总索引只能指向这些已有标题）】\n' + '\n'.join(outline['_child_titles']))
     # 标段白名单放最前：这是"只能写什么"的硬边界，比其他素材优先级更高。
@@ -198,6 +209,8 @@ def _build_context(outline: dict, facts: list[dict], knowledge: list[dict], sibl
             "【招标要求（编写依据：评分办法/技术要求/编制要求/废标风险，必须响应，不得遗漏）】\n"
             + reqs
         )
+    from app.services.contact_policy import CONTACT_POLICY
+    parts.append('【联系信息用途与服务时限边界】\n' + CONTACT_POLICY)
     if file_refs:
         parts.append(fill_genre("【本项目文件原文片段（招标/指导性{G_SHORT}/答疑/勘察/策划，可引用数字须标注出处文件名）】\n", domain) + "\n".join(
             f"◆ 出处：{r.get('title', '')}\n{r.get('chunk', '')}" for r in file_refs
@@ -224,7 +237,7 @@ def _build_context(outline: dict, facts: list[dict], knowledge: list[dict], sibl
     tbl_items = []
     for table in outline.get('table_needs') or []:
         if isinstance(table, dict) and table.get('name'):
-            tbl_items.append(f"- 表「{table['name']}」：{table.get('purpose') or ''}；用可编辑 Markdown 表格，不得画成图片")
+            tbl_items.append(f"- 表「{table['name']}」：{table.get('purpose') or ''}；用可编辑 Markdown 表格，紧邻表格上方独立写出此完整表名，不得画成图片或再留图片占位")
     img_items = []
     seen_images: set[str] = set()
     yielded: list[str] = []          # 让出去的图名（保序去重），下面单列一段告知模型
@@ -339,7 +352,7 @@ def _build_context(outline: dict, facts: list[dict], knowledge: list[dict], sibl
     # 怎么组织；结构布局由历史参考示范，不把思路当目录模板照抄）
     thinking = (outline.get('thinking') or '').strip()
     kp = outline.get('key_points') or []
-    if thinking or kp:
+    if (thinking or kp) and outline.get('_writing_role') != 'scope_introduction':
         parts.append(
             "【本章编写思路（内容指引：要写什么、数据从哪取、怎么组织；不是结构模板）】\n"
             f"{thinking}\n"
@@ -349,6 +362,9 @@ def _build_context(outline: dict, facts: list[dict], knowledge: list[dict], sibl
         f"{len_line}\n"
         f"\n请撰写章节「{outline.get('chapter_title', '')}」的正文。"
     )
+    if outline.get('_writing_role') == 'scope_introduction':
+        parts.append('【本次输出边界】仅输出150至300字的一至两段总导语，不输出标题、表格或索引。'
+                     '历史思路和参考资料里的评分索引要求不属于本节点，禁止沿用。')
     return "\n\n".join(parts)
 
 

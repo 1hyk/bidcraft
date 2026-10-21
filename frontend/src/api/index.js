@@ -1,5 +1,10 @@
 import axios from 'axios'
 
+export const imageAssets = id => api.get(`/projects/${id}/image-assets`)
+export const regenerateImage = (id,body) => api.post(`/projects/${id}/image-assets/regenerate`,body,{timeout:240000})
+export const reviseMermaid = (id,body) => api.post(`/projects/${id}/image-assets/mermaid/revise`,body,{timeout:120000})
+export const uploadImageAsset = (id,file,caption) => { const form=new FormData();form.append('file',file);form.append('caption',caption);return api.post(`/projects/${id}/image-assets/upload`,form) }
+
 const api = axios.create({ baseURL: '/api', timeout: 60000 })
 export const companyDocuments = () => api.get('/company/documents')
 export const companyFacts = () => api.get('/company/facts')
@@ -14,6 +19,7 @@ export const companyApply = (id,node,tokens) => api.post(`/company/projects/${id
 export const companyRevisions = id => api.get(`/company/projects/${id}/revisions`)
 export const companyUndo = (id,revision) => api.post(`/company/projects/${id}/revisions/${revision}/undo`)
 export const getUnderstanding = id => api.get(`/projects/${id}/understanding`)
+export const saveRequirementArrangement = (id, reqId, nodeIds) => api.put(`/projects/${id}/requirements/${reqId}/arrangement`, {node_ids:nodeIds})
 export const confirmUnderstanding = (id,data) => api.put(`/projects/${id}/understanding`,data)
 export const getCompanyProfile = () => api.get('/company-profile')
 export const saveCompanyProfile = data => api.put('/company-profile',data)
@@ -24,6 +30,7 @@ export const listProjects = (keyword = '') => api.get('/projects', { params: { k
 export const createProject = (data) => api.post('/projects', data)
 export const updateProject = (id, data) => api.patch(`/projects/${id}`, data)
 export const classificationSuggestions = (id) => api.get(`/projects/${id}/classification-suggestions`)
+export const refreshClassificationSuggestions = (id) => api.post(`/projects/${id}/classification-suggestions/refresh`)
 export const deleteProject = (id) => api.delete(`/projects/${id}`)
 // 标段（M1-2 三种形态：多选一 / 单标段确认 / 无标段直接进入）
 export const listLots = (projectId) => api.get(`/projects/${projectId}/lots`)
@@ -246,7 +253,11 @@ export const savePagePlan = (projectId, payload) => api.put(`/projects/${project
 export const measurePagePlan = (projectId) => api.post(`/projects/${projectId}/page-plan/measure`, null, { timeout: 600000 })
 export const adjustPagePlan = (projectId) => api.post(`/projects/${projectId}/page-plan/adjust`)
 export const checkProposal = (projectId) => api.get(`/export/${projectId}/check`)
+export const resolveProposalIssue = (projectId, data) => api.post(`/export/${projectId}/issues/resolve`, data)
 export const reviewProposal = (projectId) => api.post(`/export/${projectId}/review`, null, { timeout: 300000 })
 export const proposalRequirements = (projectId) => api.get(`/export/${projectId}/requirements`)
+export const syncScoringIndex = (projectId) => api.post(`/sections/${projectId}/scoring-index/sync`)
 
 export default api
+
+export const serviceTypeOptions = () => api.get("/projects/service-type-options")

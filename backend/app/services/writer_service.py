@@ -27,6 +27,28 @@ _stop_flags: dict[int, threading.Event] = {}
 _batch_running: set[int] = set()
 
 
+def _reconcile_single_retry(project_id: int) -> None:
+    """失败批次的最后一章补成功后，按真实正文恢复完成状态。"""
+    if project_id in _batch_running:
+        return
+    row = query_one('SELECT stage FROM compile_session WHERE project_id=%s', (project_id,))
+    if not row or row.get('stage') != 'failed':
+        return
+    from app.services.section_service import generation_node_ids
+    ids = generation_node_ids(project_id)
+    rows = query('SELECT n.id,n.status,c.content FROM chapter_node n LEFT JOIN section_content c ON c.chapter_node_id=n.id WHERE n.project_id=%s', (project_id,))
+    ready = set()
+    for node in rows:
+        content = node.get('content') or {}
+        if isinstance(content, str):
+            content = json.loads(content)
+        if node.get('status') in {'generated','confirmed'} and str(content.get('body') or '').strip():
+            ready.add(node['id'])
+    if ids and ids <= ready:
+        from app.services import compile_service
+        compile_service.update_progress(project_id,stage='done',progress=len(ids),total=len(ids),error='')
+
+
 def _confirmed_facts(project_id: int) -> list[dict]:
     """已确认事实（按当前选定标段过滤，统一走 fact_service.confirmed_facts）。"""
     from app.services.fact_service import confirmed_facts
@@ -116,6 +138,7 @@ def _used_summary(ctx: dict) -> dict:
         "lot": bool(ctx.get("lot_info")),
         "images": ctx.get("image_refs") or [],
         "image_generation_errors": ctx.get("image_generation_errors") or [],
+        "image_review_warnings": ctx.get("image_review_warnings") or [],
     }
 
 
@@ -136,6 +159,10 @@ def _image_plan(project_id: int) -> dict:
 
 
 def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
+    from app.services.document_checks import resolve_requirement_refs, internal_references
+    if internal_references(body):
+        from app.services.compilation_requirements import load_requirements
+        body = resolve_requirement_refs(body, load_requirements(project_id))
     if not body or not body.strip():
         raise ValueError('模型未返回正文，原有内容已保留，请重试')
     from app.services.image_planning import normalize_outline
@@ -149,7 +176,23 @@ def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
     from app.services.template_completion import complete as complete_templates, has_named_table
 
     body = flag_capability_claims(flag_unverified_conclusions(normalize_body(body)))
-    if (ctx.get("outline") or {}).get("_writing_role") == "introduction":
+    role = (ctx.get("outline") or {}).get("_writing_role")
+    if role == 'scope_introduction':
+        from app.core.page_plan import count_words
+        from app.core.chapter_title import normalize
+        import re
+        # 模型常复述当前节点标题。这不是新的子章节，先去重再检查职责。
+        first = re.match(r'^\s*#{1,6}\s+([^\n]+)\n+', body)
+        if first and normalize(first.group(1)) == normalize((ctx.get('node') or {}).get('title', '')):
+            body = body[first.end():].lstrip()
+        if not body.strip():
+            raise ValueError('总范围仅返回标题，没有导语正文，请重试本节点')
+        if count_words(body)>600 or re.search(r'(?m)^\s*#{1,6}\s|<h[1-6]\b|```|(?m:^\s*\|)', body):
+            raise ValueError('总范围导语超出职责或包含章节展开，未替换原正文；请局部重试本节点')
+        return body
+    if role == "introduction":
+        from app.services.chapter_references import normalize_index
+        body = normalize_index(body, ctx['outline'].get('_child_titles') or [])
         return body
     body = bind_references(body, ctx.get('image_refs') or [])
     protected = set(ctx.get('img_skips') or {}) | {n['name'] for n in ctx['outline'].get('image_needs') or [] if n.get('source')=='material'}
@@ -158,7 +201,7 @@ def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
         name = str(need.get('name') or '').strip() if isinstance(need,dict) else ''
         if name and name not in body and name not in protected and not has_named_table(body,name):
             body += '\n\n[图片占位：'+name+']\n'
-    body = complete_templates(body, protected)
+    body = complete_templates(body, protected, table_names=[n.get('name','') for n in ctx['outline'].get('table_needs') or []])
     body = complete_mermaid(body, protected)
     return normalize_body(complete(ctx, body, project_id, node_id) if has_requests(ctx) else body)
 
@@ -192,11 +235,16 @@ def _chapter_context(project_id: int, node_id: int, img_skips: dict[str, str] | 
             outline = None
     if not outline:
         raise ValueError("该章节尚无编写思路，请先完成「编写思路」确认")
+    if outline.get('_document_role') == 'scoring_index':
+        raise ValueError('索引使用编辑器中的正式表格，请直接编辑，不使用正文模型重生成')
     # 根据真实目录判定，兼容没有角色标记的历史思路；只在用户触发生成时生效。
     children = query("SELECT title FROM chapter_node WHERE project_id=%s AND parent_id=%s ORDER BY sort_order,id",
                      (project_id, node_id))
     if children:
-        outline = dict(outline, _writing_role="introduction", need_table=False,
+        from app.core.chapter_title import normalize
+        from app.core.config import settings
+        role = 'scope_introduction' if normalize(node['title']) == normalize(settings.generation_root_title or '') else 'introduction'
+        outline = dict(outline, _writing_role=role, need_table=False,
                        need_image=False, image_needs=[], table_needs=[],
                        _child_titles=[child['title'] for child in children])
 
@@ -490,6 +538,7 @@ def generate_chapter_events(project_id: int, node_id: int):
         raise
     # 只保存最终版一次，让 prev_content 仍指向生成前的正文，而非本次首稿。
     persist_one(project_id, node_id, body, used=_used_summary(ctx))
+    _reconcile_single_retry(project_id)
     yield {"type": "chapter_done", "node_id": node_id, "length": length_status(body, target)}
 
 
@@ -517,6 +566,7 @@ def write_chapter_once(project_id: int, node_id: int, extra_requirements: str = 
     )
     content = _finish_images(ctx, content, project_id, node_id)
     persist_one(project_id, node_id, content, used=_used_summary(ctx))
+    _reconcile_single_retry(project_id)
     return {"ok": True, "node_id": node_id, "title": ctx["node"]["title"],
             "chars": len(content)}
 
@@ -554,6 +604,7 @@ def _pending_nodes(project_id: int) -> list[dict]:
     allowed = generation_node_ids(project_id)
     return [n for n in query(
         "SELECT id, title FROM chapter_node WHERE project_id = %s AND status = 'thought_ready'"
+        " AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outline,'$._document_role')),'') != 'scoring_index'"
         " ORDER BY sort_order, id",
         (project_id,),
     ) if n["id"] in allowed]
@@ -596,14 +647,16 @@ def start_batch(project_id: int) -> dict:
 
     def _run():
         done = 0
+        failures = []
         try:
             with ThreadPoolExecutor(max_workers=BATCH_CONCURRENCY) as pool:
-                futures = [pool.submit(_write, n) for n in nodes]
-                for fut in futures:
+                futures = [(n, pool.submit(_write, n)) for n in nodes]
+                for node, fut in futures:
                     try:
                         if fut.result():
                             done += 1
                     except Exception as e:  # noqa: BLE001 单章失败不中断批量
+                        failures.append(f"{node['title']}：{str(e)[:180]}")
                         print(f"[批量生成] 章节失败: {e}")
                     compile_service.update_progress(project_id, stage="writing",
                                                     progress=done, total=total)
@@ -612,7 +665,7 @@ def start_batch(project_id: int) -> dict:
                 project_id,
                 stage="outlines_ready" if stopped else "done" if done==total else "failed",
                 progress=done, total=total,
-                error='' if stopped else None if done==total else f'部分章节生成失败：{done}/{total}，已保留成功内容，可重试未完成章节',
+                error='' if stopped else None if done==total else f'部分章节生成失败：{done}/{total}，已保留成功内容。' + '；'.join(failures),
             )
             print(f"[批量生成] {'中途停止' if stopped else '完成'} {done}/{total}")
         except Exception:
@@ -651,6 +704,7 @@ def rewrite_chapters(project_id: int, node_ids: list[int], task_id: int | None =
     marks = ",".join(["%s"] * len(node_ids))
     nodes = query(
         f"SELECT id, title FROM chapter_node WHERE project_id = %s AND id IN ({marks})"
+        " AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outline,'$._document_role')),'') != 'scoring_index'"
         " ORDER BY sort_order, id",
         (project_id, *node_ids),
     )

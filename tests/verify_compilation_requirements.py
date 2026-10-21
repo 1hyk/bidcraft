@@ -11,6 +11,26 @@ from app.agents import compile_graph
 
 
 class ContractTests(unittest.TestCase):
+    def test_price_method_uses_technical_requirements_not_price_chapter(self):
+        rows=[dict(id=1,category='评分办法',title='最低评审价法',content='满足实质要求后按价格排序'),
+              dict(id=2,category='技术要求',title='配件质量',suggested_chapter='配件管理方案'),
+              dict(id=3,category='技术要求',title='应急救援',suggested_chapter='应急响应方案'),
+              dict(id=4,category='技术要求',title='投标报价',suggested_chapter='报价方案')]
+        result=contract.scope_chapters(None,rows,'技术方案')
+        self.assertEqual([r['title'] for r in result],['配件管理方案','应急响应方案'])
+        toc={'chapters':[{'title':'技术方案','children':result}]}
+        contract.validate_scope_coverage(toc,rows,None,'技术方案')
+        toc['chapters'][0]['children']=[{'title':'最低评审价法'}]
+        with self.assertRaisesRegex(ValueError,'目录缺少.*原目录未替换'):
+            contract.validate_scope_coverage(toc,rows,None,'技术方案')
+
+    def test_price_score_is_removed_but_true_technical_scores_keep_priority(self):
+        rows=[dict(category='评分办法',title='最低评审价法'),*self.rows(),
+              dict(category='评分办法',title='价格评分',suggested_chapter='价格优势'),
+              dict(category='技术要求',title='零配件质量要求')]
+        self.assertEqual([r['title'] for r in contract.scope_chapters(None,rows,'技术方案')],
+                         [r['title'] for r in self.rows()])
+
     def rows(self):
         return [dict(id=i, category='评分办法', title=t, suggested_chapter=t,
                      content='必须覆盖开发、初验、联调、试运行、终验、培训六阶段',
@@ -80,6 +100,14 @@ class ContractTests(unittest.TestCase):
         conn.begin.assert_called_once()
         conn.rollback.assert_called_once()
         conn.commit.assert_not_called()
+
+    def test_explicit_stage_structure_comes_from_current_tender(self):
+        rows=[dict(id=90,title='实施安排',suggested_chapter='',content='应包括准备、执行、移交3个阶段。')]
+        children=contract.required_stage_children('实施安排',rows)
+        self.assertEqual([n['title'] for n in children],['准备','执行','移交'])
+        contract.validate_stage_coverage({'chapters':[{'title':'实施安排','children':children}]},rows)
+        self.assertEqual(contract.required_stage_children('其他方案',rows),[])
+        self.assertEqual(contract.required_stage_children('实施安排',[dict(id=91,title='实施安排',content='根据实际情况组织实施')]),[])
 
 
 if __name__=='__main__':

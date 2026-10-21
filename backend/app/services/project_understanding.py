@@ -3,6 +3,7 @@ import hashlib
 import json
 import threading
 import uuid
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -59,6 +60,86 @@ def company_context():
               '应用行业不代表我方具有该行业的生产、制造、施工或运营资质。')
 
 
+def requirement_group(row):
+    """编制约束和通用投标规则不要求单独关联技术正文章节。"""
+    from app.services.requirement_matrix import response_scope
+    if row.get('category') == '编制要求':
+        return 'document_rules'
+    if response_scope(row) == 'other_documents':
+        return 'bid_notices'
+    if row.get('category') == '废标风险' and re.fullmatch(
+            r'实质性条款(?:响应(?:无效|不满足)?|不满足|符合性|要求|偏离)', str(row.get('title') or '').strip()):
+        return 'bid_notices'
+    return 'technical'
+
+
+def chapter_candidates(row, nodes):
+    """先按抽取标题定位；无结果时，仅接受要求原文明确点名的现有章节。"""
+    from app.core.chapter_title import related, normalize
+    if requirement_group(row) != 'technical':
+        return []
+    targets = [n for n in nodes if related(row.get('suggested_chapter') or row['title'], n['title'])]
+    if not targets:
+        content = normalize(row.get('content') or '')
+        targets = [n for n in nodes if len(normalize(n['title'])) >= 6 and normalize(n['title']) in content]
+    result = [{'id':n['id'],'title':n['title'], 'basis':'要求标题或原文与章节标题对应'} for n in targets]
+    if result:
+        return result
+    # 连续词片段只用于推荐位置，不构成响应结论；不设行业或条款专用词表。
+    content = re.sub(r'[（(][^）)]*(?:标记|关键项|实质性)[^）)]*[）)]', '', row.get('content') or '')
+    text = normalize((row.get('title') or '') + content)
+    title = normalize(row.get('title') or '')
+    title_grams = {title[i:i+2] for i in range(max(0, len(title)-1))}
+    grams = {text[i:i+3] for i in range(max(0, len(text)-2))}
+    ranked = []
+    for n in nodes:
+        outline = n.get('outline') or {}
+        if isinstance(outline, str):
+            try: outline = json.loads(outline)
+            except (ValueError, TypeError): outline = {}
+        evidence = str(outline.get('thinking') or '') + '；' + '；'.join(outline.get('key_points') or [])
+        normalized = normalize(evidence)
+        hits = sorted(g for g in grams if g in normalized)
+        if len(hits) < 3:
+            continue
+        # 展示原始思路片段供人复核，避免只给不可解释的相似度。
+        sentences = re.split(r'[。\n]', evidence)
+        snippet = next((s for s in sentences if any(g in normalize(s) for g in hits)), evidence)
+        topical = sum(g in normalize(n['title']) for g in title_grams)
+        score = len(hits) + topical * 8
+        if outline.get('_writing_role') == 'introduction':
+            score *= .5
+        ranked.append((score, {'id':n['id'], 'title':n['title'], 'basis':snippet[:260]}))
+    ranked.sort(key=lambda item: (-item[0], item[1]['id']))
+    return [item[1] for item in ranked[:3]]
+
+
+def _arrangement_name(project_id, lot):
+    return f"arrangements_{project_id}_{hashlib.sha1(lot.encode()).hexdigest()[:12]}.json"
+
+
+def _requirement_signature(row):
+    return hashlib.sha256(json.dumps([row.get(k) for k in ('title','content','source_file','source_location')], ensure_ascii=False).encode()).hexdigest()
+
+
+def save_arrangement(project_id, req_id, node_ids):
+    current = snapshot(project_id)
+    row = next((r for r in current['requirements'] if r['id'] == req_id and r['display_group'] == 'technical'), None)
+    allowed = {n['id'] for n in current['directory_nodes']}
+    ids = list(dict.fromkeys(node_ids))
+    if not row or any(n not in allowed for n in ids):
+        raise ValueError('要求或章节不属于当前项目标段，请刷新后重试')
+    name = _arrangement_name(project_id, current['lot'])
+    with _lock:
+        records = read(name, {})
+        if ids:
+            records[str(req_id)] = {'node_ids':ids, 'signature':_requirement_signature(row),
+                                    'node_titles':{str(n['id']):n['title'] for n in current['directory_nodes'] if n['id'] in ids}}
+        else:
+            records.pop(str(req_id), None)
+        write(name, records)
+
+
 def snapshot(project_id):
     from app.core.database import query_one, query
     from app.services.requirement_service import list_requirements
@@ -73,19 +154,29 @@ def snapshot(project_id):
     lot = selected_lot_code(project_id) or ''
     requirements = [r for r in list_requirements(project_id) if r.get('status') != 'ignored']
     allowed = generation_node_ids(project_id)
-    nodes = [n for n in query('SELECT id, title FROM chapter_node WHERE project_id = %s ORDER BY sort_order, id', (project_id,)) if n['id'] in allowed]
+    nodes = [n for n in query('SELECT id, title, outline FROM chapter_node WHERE project_id = %s ORDER BY sort_order, id', (project_id,)) if n['id'] in allowed]
+    records = read(_arrangement_name(project_id, lot), {})
+    from app.services.requirement_matrix import response_scope
     for r in requirements:
-        r['chapter_candidates'] = [{'id':n['id'], 'title':n['title']} for n in nodes
-                                   if related(r.get('suggested_chapter') or r['title'], n['title'])]
+        r['response_scope'] = response_scope(r)
+        r['display_group'] = requirement_group(r)
+        r['chapter_candidates'] = chapter_candidates(r,nodes)
+        record = records.get(str(r['id']), {})
+        ids = record.get('node_ids', []) if record.get('signature') == _requirement_signature(r) else []
+        r['arranged_chapters'] = [{'id':n['id'],'title':n['title']} for n in nodes if n['id'] in ids]
+        r['arrangement_stale'] = bool(record) and (len(r['arranged_chapters']) != len(record.get('node_ids', [])) or record.get('signature') != _requirement_signature(r)
+            or any(record.get('node_titles', {}).get(str(n['id'])) != n['title'] for n in r['arranged_chapters']))
     selected = query_one('SELECT id FROM lot WHERE project_id = %s AND selected = 1', (project_id,))
     files = query("SELECT id, file_name, status, lot_id FROM project_file WHERE project_id = %s AND category IN ('tender','clarification') ORDER BY id", (project_id,))
     if selected:
         files = [f for f in files if f.get('lot_id') in (None, selected['id'])]
     payload = {'lot':lot, 'domain':project.get('domain'), 'types':project.get('project_types'),
-               'objects':project.get('technical_objects'), 'requirements':requirements, 'files':files}
+               'service_content':project.get('service_content'), 'objects':project.get('technical_objects'), 'requirements':requirements, 'files':files}
     fingerprint = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
     record = read(f'project_{project_id}_{hashlib.sha1(lot.encode()).hexdigest()[:12]}.json', {})
     return {'project':project, 'requirements':requirements, 'files':files, 'lot':lot,
+            'directory_nodes':[{'id':n['id'],'title':n['title']} for n in nodes],
+            'has_directory': bool(nodes),
             'fingerprint':fingerprint, 'notes':record.get('notes',''),
             'confirmed':record.get('fingerprint') == fingerprint,
             'confirmed_at':record.get('confirmed_at'),
@@ -105,5 +196,11 @@ def confirm(project_id, fingerprint, notes):
 
 def generation_context(project_id):
     info = snapshot(project_id)
-    return company_context() + ('\n【用户确认的项目理解补充】\n' + info['notes']
+    project = info['project']
+    scope = ('\n【项目已保存的业务与工作对象】\n实际服务类型：'
+             + ('、'.join(project.get('project_types') or []) or '未指定，以招标原文为准')
+             + '\n本次服务内容：' + (project.get('service_content') or '未指定，以招标原文为准')
+             + '\n工作对象：' + ('、'.join(project.get('technical_objects') or []) or '未指定，以招标原文为准')
+             + '\n这些字段用于理解工作范围，不构成我方能力证明；详细任务、参数与验收条件以招标原文为准。')
+    return company_context() + scope + ('\n【用户确认的项目理解补充】\n' + info['notes']
                                 if info['confirmed'] and info['notes'] else '')

@@ -5,10 +5,10 @@
     <el-collapse><el-collapse-item title="公司名称与业务定位（可选）"><el-input v-model="profile.name" placeholder="公司名称" /><el-input v-model="profile.positioning" type="textarea" placeholder="业务定位，不代表具体资质或本次承诺" /><el-button @click="saveBasic">保存基本资料</el-button></el-collapse-item></el-collapse>
     <section class="tools"><label class="upload">{{ uploading ? '上传中…' : '上传并提取资料' }}<input type="file" multiple accept=".docx,.pdf,.xlsx,.png,.jpg,.jpeg" :disabled="uploading" @change="upload" /></label><el-button @click="manual">手工补录</el-button><el-button @click="refresh">刷新</el-button></section>
     <p>支持 Word、文字型 PDF、Excel 和单张图片。扫描 PDF 暂需转为文字版或按图片上传。每份最多25MB；重复文件不重复提取。</p>
-    <el-table :data="documents" max-height="230"><el-table-column prop="name" label="原始资料" /><el-table-column prop="status" label="提取状态" width="120" /><el-table-column prop="error" label="提示" /><el-table-column width="160"><template #default="{row}"><a :href="`/api/company/documents/${row.id}/file`" target="_blank" rel="noopener">原件</a><el-button v-if="row.status === 'failed'" link @click="retry(row.id)">重试</el-button></template></el-table-column></el-table>
+    <el-table :data="documents" max-height="230"><el-table-column prop="name" label="原始资料" /><el-table-column label="提取状态" width="120"><template #default="{row}">{{ documentStatusName(row.status) }}</template></el-table-column><el-table-column prop="error" label="提示" /><el-table-column width="160"><template #default="{row}"><a :href="`/api/company/documents/${row.id}/file`" target="_blank" rel="noopener">原件</a><el-button v-if="row.status === 'failed'" link @click="retry(row.id)">重试</el-button></template></el-table-column></el-table>
     <h3>事实候选与已核实资料</h3>
     <el-radio-group v-model="filter"><el-radio-button label="pending">待核实</el-radio-button><el-radio-button label="confirmed">已核实</el-radio-button><el-radio-button label="all">全部</el-radio-button></el-radio-group>
-    <el-table :data="visible" empty-text="暂无资料，上传文件或手工补录即可" row-key="id">
+    <el-table :data="visible" :empty-text="emptyText" row-key="id">
       <el-table-column label="事实" min-width="300"><template #default="{row}"><strong>{{ row.field_name || row.category }}</strong><p>{{ row.subject }}</p><p>{{ row.value }}</p></template></el-table-column>
       <el-table-column label="依据" min-width="250"><template #default="{row}"><p>{{ row.evidence }}</p><small>{{ row.source_name || '手工录入' }} · {{ row.location }}</small><p><a v-if="row.source_url" :href="row.source_url" target="_blank" rel="noopener">对照原件</a></p></template></el-table-column>
       <el-table-column label="状态及有效期" width="170"><template #default="{row}"><el-tag>{{ statusName(row.status) }}</el-tag><p>{{ row.valid_until || '有效期未填写' }}</p><el-tag v-if="row.expired" type="danger">已过期</el-tag><el-tag v-if="row.conflict" type="danger">存在冲突，不参与生成</el-tag></template></el-table-column>
@@ -29,6 +29,8 @@ const profile=ref({}),documents=ref([]),facts=ref([]),loading=ref(false),uploadi
 const categories=['公司介绍','服务能力','资质','人员','设备','业绩','产品','其他']
 const visible=computed(()=>facts.value.filter(f=>filter.value==='all' || f.status===filter.value))
 const error=e=>ElMessage.error(e?.response?.data?.detail || e.message)
+const emptyText=computed(()=>filter.value==='pending' ? '暂无待核实候选，可切换“已核实”或“全部”查看现有资料' : filter.value==='confirmed' ? '暂无已核实资料，请核对候选后启用' : '暂无资料，上传文件或手工补录即可')
+const documentStatusName=s=>({uploaded:'待提取',pending:'待提取',extracting:'提取中',extracted:'已提取',failed:'提取失败'}[s] || s)
 const statusName=s=>({pending:'待核实',confirmed:'已核实',rejected:'已否决',disabled:'已停用'}[s] || s)
 async function refresh(){const [d,f]=await Promise.all([companyDocuments(),companyFacts()]);documents.value=d.data;facts.value=f.data}
 async function saveBasic(){try{await companySaveBasic({name:profile.value.name,positioning:profile.value.positioning});ElMessage.success('基本资料已保存')}catch(e){error(e)}}

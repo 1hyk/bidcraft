@@ -1,4 +1,4 @@
-"""正文生成后的缺图补齐：确认历史候选 → 生成允许合成的插图 → 保留失败占位。"""
+"""正文生成后的配图补齐；失败的可合成插图仅记问题，不在正文保留空占位。"""
 import json
 import re
 
@@ -19,10 +19,7 @@ def _choose_history(need: dict, refs: list[dict]) -> dict | None:
         return asset
     if not refs:
         return None
-    # 唯一完整图名命中是确定性来源，其他情况需语义核验，不能按相似度强插。
-    exact = [a for a in refs if a["caption"] == need["name"]]
-    if len({a["asset_id"] for a in exact}) == 1:
-        return exact[0]
+    # 同名只是召回信号，不证明内容适用；只有思路明确指定的可见素材ID可直接认领。
     from app.services.llm import llm
     from app.agents.json_util import extract_json
 
@@ -77,14 +74,19 @@ def complete(ctx: dict, body: str, project_id: int, node_id: int) -> str:
     body = bind_references(body, refs)
     attempted = 0
     errors = []
+    reviews = []
     for need in (ctx.get("outline") or {}).get("image_needs") or []:
         if not eligible(need) or need["name"] in (ctx.get("img_skips") or {}):
             continue
         name = str(need["name"]).strip()
         try:
-            if ctx.get("image_search_ok") is False:
-                raise ImageGenerationError("历史素材检索失败，未把检索失败当作缺图来生成")
-            asset = _choose_history(need, refs)
+            try:
+                if ctx.get("image_search_ok") is False:
+                    raise ImageGenerationError("历史素材检索暂不可用")
+                asset = _choose_history(need, refs)
+            except ImageGenerationError as exc:
+                reviews.append({'name':name,'reason':str(exc)+'；已尝试AI示意替代，请核对'})
+                asset = None
             if asset is None:
                 if attempted >= max(0, settings.image_generation_max_per_chapter):
                     raise ImageGenerationError("已达到本章自动生图数量上限")
@@ -97,10 +99,24 @@ def complete(ctx: dict, body: str, project_id: int, node_id: int) -> str:
             body = _place(body, name, marker, present)
         except Exception as exc:
             reason = str(exc) if isinstance(exc, ImageGenerationError) else "配图处理失败，请查看后端日志"
-            errors.append({"name": name, "reason": reason})
-            # 失败仍留下可行动的缺图位置，不能静默吞掉，也不影响整章正文保存。
-            if name not in body:
-                body = body.rstrip() + f"\n\n[图片占位：{name}]\n"
+            body, anchor = remove_failed_placeholder(body, name)
+            errors.append({"name": name, "reason": reason, "context":anchor})
     ctx["image_refs"] = refs
     ctx["image_generation_errors"] = errors
+    ctx["image_review_warnings"] = reviews
     return body
+
+
+def remove_failed_placeholder(body: str, name: str) -> tuple[str, str]:
+    """仅移除本次失败需求的无素材ID占位，不碰其他图、真实材料或代码。"""
+    pattern = re.compile(r'\[图片占位[：:]\s*([^\]]+)\]')
+    parts = re.split(r'(```.*?```)', body, flags=re.S)
+    def replace(m):
+        label = m[1].strip()
+        if '素材ID=' not in label and (label == name or label.startswith(name+'/') or label.startswith(name+'／')):
+            return ''
+        return m[0]
+    result = ''.join(p if p.startswith('```') else pattern.sub(replace,p) for p in parts)
+    paragraphs = [p.strip() for p in result.split('\n\n') if p.strip() and not p.strip().startswith(('```','[图片占位'))]
+    anchor = next((p for p in reversed(paragraphs) if not p.startswith('#')), '')[-200:]
+    return result, anchor

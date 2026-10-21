@@ -57,6 +57,15 @@ def read_tree(project_id: int):
     return get_tree(project_id)
 
 
+@router.post('/{project_id}/scoring-index/sync')
+def sync_scoring_index(project_id: int):
+    from app.services.scoring_index import ensure_editor_index
+    try:
+        return ensure_editor_index(project_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.put("/{project_id}/tree")
 def write_tree(project_id: int, body: TreeBody):
     """整树保存（幂等 upsert 标题匹配，前端"确认目录"时用）。"""

@@ -334,10 +334,13 @@ def delete_node_tree(project_id: int, node_id: int) -> int:
 def update_outline_by_id(project_id: int, node_id: int, outline: dict) -> bool:
     """手动编辑章节编写思路并保存（改写 outline；unwritten 升 thought_ready）。"""
     cur = query_one(
-        "SELECT id FROM chapter_node WHERE id = %s AND project_id = %s", (node_id, project_id)
+        "SELECT id,outline FROM chapter_node WHERE id = %s AND project_id = %s", (node_id, project_id)
     )
     if not cur:
         return False
+    from app.services.scoring_index import is_index, ROLE
+    if is_index(cur):
+        outline = dict(outline, _document_role=ROLE)
     execute(
         "UPDATE chapter_node SET outline = %s,"
         " status = IF(status = 'unwritten', 'thought_ready', status) WHERE id = %s",

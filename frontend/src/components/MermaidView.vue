@@ -10,6 +10,7 @@
         <pre class="mm-src-readonly">{{ node.attrs.code }}</pre>
       </div>
       <button class="mm-src-btn" title="编辑源码" @click.stop="showSource = true">⌨ 源码</button>
+      <button class="mm-ai-btn" :disabled="!editor.isEditable" @click.stop="openRevision">AI修改本图</button>
     </div>
     <div v-else class="mm-edit">
       <textarea v-model="editingCode" class="mm-textarea" spellcheck="false" />
@@ -18,11 +19,21 @@
         <button class="mm-btn primary" @click.stop="applySource">应用</button>
       </div>
     </div>
+    <el-dialog v-model="revisionOpen" title="修改本张Mermaid图" width="min(820px, 94vw)" append-to-body :close-on-click-modal="!revising" :show-close="!revising">
+      <p>直接描述需要修改的内容，例如“改成从左到右，去掉重复步骤”。需要重画时可写“根据本章内容重新设计”。只生成本图候选，不重写章节。</p>
+      <el-input v-model="revisionFeedback" type="textarea" :rows="3" maxlength="2000" :disabled="revising" placeholder="说明要修改、保留或重新设计的内容" />
+      <p><el-button :loading="revising" :disabled="!revisionFeedback.trim() || revising" @click="requestRevision">生成单图候选</el-button><small>调用当前配置的文本模型，可能消耗额度。</small></p>
+      <el-alert v-if="revisionError" :title="revisionError" type="error" :closable="false" />
+      <div v-if="candidateSvg" class="mm-candidate"><h4>修改候选预览</h4><div v-html="candidateSvg" /><details><summary>查看候选源码</summary><pre>{{ candidateCode }}</pre></details></div>
+      <template #footer><el-button :disabled="revising" @click="revisionOpen=false">关闭，保留原图</el-button><el-button type="primary" :disabled="!candidateSvg || revising || !editor.isEditable" @click="adoptRevision">采用修改</el-button></template>
+    </el-dialog>
   </node-view-wrapper>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import {ElMessage} from 'element-plus'
+import {reviseMermaid} from '../api'
 import { nodeViewProps, NodeViewWrapper } from '@tiptap/vue-3'
 import themeVariables from '../mermaidTheme.json'
 import { splitMindmap } from '../mermaidLayout'
@@ -33,6 +44,37 @@ const error = ref('')
 const loading = ref(false)
 const showSource = ref(false)
 const editingCode = ref('')
+const revisionOpen=ref(false),revisionFeedback=ref(''),revising=ref(false),revisionError=ref(''),candidateCode=ref(''),candidateSvg=ref('')
+let revisionSource='',revisionSeq=0
+function openRevision(){revisionOpen.value=true;revisionError.value='';candidateCode.value='';candidateSvg.value='';revisionSource=props.node.attrs.code || ''}
+async function requestRevision(){
+  if(revising.value || !props.editor.isEditable)return
+  const seq=++revisionSeq
+  revisionSource=props.node.attrs.code || ''
+  revising.value=true;revisionError.value='';candidateSvg.value='';candidateCode.value=''
+  try{
+    const opts=props.extension.options
+    if(!opts.projectId || !opts.nodeId)throw Error('当前图未关联项目章节，无法生成候选')
+    const {data}=await reviseMermaid(opts.projectId,{node_id:opts.nodeId,code:revisionSource,feedback:revisionFeedback.value})
+    if(seq!==revisionSeq)return
+    const {default:mermaid}=await import('mermaid')
+    mermaid.initialize({startOnLoad:false,theme:'default',securityLevel:'strict',suppressErrorRendering:true,themeVariables})
+    const pieces=splitMindmap(data.code),out=[]
+    for(let i=0;i<pieces.length;i++)out.push((await mermaid.render(`mm-revision-${Date.now()}-${seq}-${i}`,pieces[i])).svg)
+    if(seq!==revisionSeq)return
+    candidateCode.value=data.code;candidateSvg.value=out.join('')
+  }catch(e){if(seq===revisionSeq)revisionError.value=e?.response?.data?.detail || '候选生成或语法渲染失败，原图未修改；请调整要求后重试。'}
+  finally{if(seq===revisionSeq)revising.value=false}
+}
+function adoptRevision(){
+  if(!props.editor.isEditable || !candidateSvg.value)return
+  if(props.node.attrs.code!==revisionSource){revisionError.value='原图源码已变化，请重新生成候选，未覆盖当前图';return}
+  props.updateAttributes({code:candidateCode.value})
+  props.extension.options.onChanged?.()
+  revisionOpen.value=false
+  ElMessage.success('已采用本图修改，可使用编辑器撤销恢复')
+}
+onBeforeUnmount(()=>{revisionSeq++})
 
 let renderSeq = 0
 
@@ -74,6 +116,7 @@ async function render(code) {
 
 function applySource() {
   props.updateAttributes({ code: editingCode.value })
+  props.extension.options.onChanged?.()
   showSource.value = false
 }
 
@@ -87,6 +130,8 @@ watch(showSource, (v) => { if (v) onSourceOpen() })
 </script>
 
 <style scoped>
+.mm-ai-btn { position:absolute;right:84px;bottom:4px;border:1px solid #dbe3f0;border-radius:4px;background:white;color:#315bd6;padding:3px 8px;cursor:pointer;font-size:12px; }
+.mm-candidate { overflow:auto;max-height:420px; }.mm-candidate :deep(svg){max-width:100%;height:auto}.mm-candidate pre{white-space:pre-wrap;font-size:12px}
 .mermaid-view { margin: 14px 0; }
 .mm-render {
   position: relative; border: 1px solid var(--line); border-radius: var(--radius-s);

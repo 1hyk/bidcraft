@@ -2,7 +2,7 @@
   <div class="app-shell">
     <GlobalNav v-if="!isFullscreen" />
     <div class="app-main" :class="{ fullscreen: isFullscreen }">
-      <router-view />
+      <router-view :key="route.path" />
     </div>
   </div>
 </template>

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS project (
   description TEXT COMMENT '项目描述',
   project_type VARCHAR(50) DEFAULT '' COMMENT '工程类型：铁路/公路/房建/市政…',
   project_types JSON NULL COMMENT '项目业务类型列表：可多选，仅作生成侧重点，不隔离素材；NULL兼容旧分类',
+  service_content TEXT NULL COMMENT '经用户保存的本次服务内容：保留具体业务描述，与服务分类分开',
   technical_objects JSON NULL COMMENT '经用户确认的技术对象列表：从招标文件建议，可人工修正',
   domain VARCHAR(30) NOT NULL DEFAULT 'lowalt' COMMENT '知识领域（决定匹配哪个域的知识库、用哪套专业标签词表）',
   toc_hint JSON NULL COMMENT '招标文件规定的施组目录（解析招标文件时提取，目录生成优先采用）',

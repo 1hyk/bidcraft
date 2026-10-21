@@ -71,7 +71,8 @@ def assemble_inputs(project_id: int) -> dict:
         lot_detail = ""
     project_info = (
         f"项目名称：{proj.get('name', '')}\n"
-        f"项目类型：{'、'.join(business_types) or '未指定，以招标文件为准'}\n"
+        f"本次服务内容：{proj.get('service_content') or '未指定，以招标文件为准'}\n"
+        f"服务类型：{'、'.join(business_types) or '未指定，以招标文件为准'}\n"
         f"已确认技术对象：{'、'.join(objects) or '未确认，以招标文件为准'}\n"
         "项目类型仅提示业务侧重点，招标要求优先；未选择某类型不得遗漏招标要求，也不据此排除同域素材。\n"
         f"所属领域：{domain.name}\n"
@@ -437,6 +438,10 @@ def regenerate_node_outline(task_id: int, project_id: int, node_id: int) -> dict
 
     if node_id not in generation_node_ids(project_id):
         return {"ok": False, "error": "该章节不在当前编制范围内"}
+    from app.services.scoring_index import is_index
+    index_node = query_one('SELECT outline FROM chapter_node WHERE id=%s AND project_id=%s', (node_id, project_id))
+    if index_node and is_index(index_node):
+        return {'ok': False, 'error': '索引是正式可编辑表格，不使用模型重新生成思路'}
     lot_text = lot_brief(project_id)  # 本标段工程构成（思路不得写本标段没有的工程）
     dom = domain_of_project(project_id)  # 知识页只在项目所属领域里找
 

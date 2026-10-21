@@ -3,7 +3,7 @@
     :model-value="modelValue"
     @update:model-value="(v) => emit('update:modelValue', v)"
     direction="rtl"
-    size="72%"
+    size="min(1200px, 96vw)"
     :with-header="false"
     class="fs-drawer"
   >
@@ -13,10 +13,13 @@
           <div class="fs-title">章节索引 · {{ fileName }}</div>
           <div class="fs-sub">AI 建立的「目录 + 概要 + 适用范围」索引，点击章节查看完整原文（含表格与图片）</div>
         </div>
-        <span class="fs-count num">{{ sections.length }} 节</span>
+        <span class="fs-count num">{{ indexLoading ? '读取中' : sections.length + ' 节' }}</span>
+        <el-button aria-label="关闭招标原文" @click="emit('update:modelValue',false)">关闭</el-button>
       </header>
 
-      <div v-if="!sections.length" class="fs-empty">
+      <div v-if="indexLoading" class="fs-empty" role="status">正在读取章节索引…</div>
+      <div v-else-if="indexError" class="fs-empty"><p>{{ indexError }}</p><el-button @click="loadSections">重试读取</el-button></div>
+      <div v-else-if="!sections.length" class="fs-empty">
         <p>该文件暂无章节索引</p>
         <p class="fs-empty-sub">解析完成后自动建立；如刚解析请稍候刷新</p>
       </div>
@@ -87,6 +90,8 @@ const sections = ref([])
 const current = ref(null)
 const text = ref('')
 const loading = ref(false)
+const indexLoading=ref(false),indexError=ref('')
+let indexVersion=0,sectionVersion=0
 const metaOpen = ref(true)
 
 const html = computed(() => {
@@ -134,33 +139,35 @@ function onNodeClick(data) {
 }
 
 async function select(s) {
-  current.value = s
-  loading.value = true
-  text.value = ''
+  const version=++sectionVersion,project=props.projectId,file=props.fileId
+  current.value=s;loading.value=true;text.value=''
   try {
-    const { data } = await fileSectionContent(props.projectId, props.fileId, s.id)
-    text.value = data.text
-  } catch {
-    text.value = '原文加载失败'
-  } finally {
-    loading.value = false
-  }
+    const {data}=await fileSectionContent(project,file,s.id)
+    if(version===sectionVersion && project===props.projectId && file===props.fileId)text.value=data.text
+  }catch {if(version===sectionVersion)text.value='原文加载失败，请重新点击章节重试'}
+  finally {if(version===sectionVersion)loading.value=false}
 }
-
-watch(() => [props.modelValue, props.fileId], async ([open, fid]) => {
-  if (!open || !fid) return
-  sections.value = []
-  current.value = null
+async function loadSections() {
+  const version=++indexVersion,project=props.projectId,file=props.fileId
+  sectionVersion++;sections.value=[];current.value=null;text.value='';indexError.value='';indexLoading.value=true
   try {
-    sections.value = (await fileSections(props.projectId, fid)).data
-  } catch { /* ignore */ }
+    const {data}=await fileSections(project,file)
+    if(version===indexVersion && project===props.projectId && file===props.fileId)sections.value=data
+  }catch {if(version===indexVersion)indexError.value='章节索引读取失败，请重试；不能据此判断原文未解析'}
+  finally {if(version===indexVersion)indexLoading.value=false}
+}
+watch(()=>[props.modelValue,props.fileId,props.projectId],([open,fid])=>{
+  if(open && fid)loadSections()
+  else {indexVersion++;sectionVersion++}
 })
+
 </script>
 
 <style scoped>
 .fs-wrap { display: flex; flex-direction: column; height: 100%; }
 .fs-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
-.fs-title { font-size: 15px; font-weight: 700; }
+.fs-head { gap:12px; }.fs-head > div { flex:1;min-width:0; }.fs-head .el-button,.fs-count { flex-shrink:0; }
+.fs-title { overflow-wrap:anywhere; font-size: 15px; font-weight: 700; }
 .fs-sub { font-size: 11px; color: var(--text-3); margin-top: 3px; }
 .fs-count { font-size: 12px; color: var(--text-3); }
 

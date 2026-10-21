@@ -34,11 +34,11 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           </template>
         </el-input>
-        <el-select v-model="domainFilter" placeholder="全部领域" clearable class="type-select" @change="applyFilter">
+        <el-select v-model="domainFilter" placeholder="全部领域" clearable class="type-select" @change="changeDomainFilter">
           <el-option v-for="d in domains" :key="d.key" :label="d.name" :value="d.key" />
         </el-select>
-        <el-select v-model="typeFilter" placeholder="全部类型" clearable class="type-select" @change="applyFilter">
-          <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
+        <el-select v-model="typeFilter" placeholder="全部服务类型" title="仅筛选项目已保存的类型；不含尚未采用的 AI 建议" clearable class="type-select" @change="applyFilter">
+          <el-option v-for="t in filterTypeOptions" :key="t" :label="t" :value="t" />
         </el-select>
         <el-dropdown trigger="click" @command="sortBy">
           <button class="sort-btn">
@@ -70,8 +70,8 @@
       <div v-else class="card-grid">
         <div v-for="(p, i) in filtered" :key="p.id" class="project-card" role="link" tabindex="0" :aria-label="'进入项目：'+p.name" @click="enter(p.id)" @keydown.enter.self="enter(p.id)">
           <div class="card-top">
-            <div class="card-badge" :title="p.project_types?.join('、') || '服务类型未确认'" :style="{ background: badgeBg(p.id), color: badgeColor(p.id) }">
-              {{ p.project_types?.join('、') || '服务类型未确认' }}
+            <div class="card-badge" :title="p.project_types?.join('、') || '未设置服务类型'" :style="{ background: badgeBg(p.id), color: badgeColor(p.id) }">
+              {{ p.project_types?.join('、') || '未设置服务类型' }}
             </div>
             <div class="card-top-right">
               <span class="card-no num">№ {{ String(p.id).padStart(3, '0') }}</span>
@@ -136,25 +136,17 @@
           <el-input v-model="form.name" placeholder="如：XX 项目技术方案编制服务" size="large" />
         </el-form-item>
         <el-form-item label="应用行业">
-          <el-select v-model="form.domain" size="large" class="domain-select" @change="form.project_types = form.project_types.filter(t => typesFor(form.domain).includes(t))">
+          <el-select v-model="form.domain" size="large" class="domain-select">
             <el-option v-for="d in domains" :key="d.key" :label="d.name" :value="d.key" />
           </el-select>
           <p class="domain-hint">{{ domainHelp(form.domain) }}</p>
         </el-form-item>
         <el-collapse><el-collapse-item title="补充业务信息（可选，不填也能编制）">
         <el-form-item label="服务类型（可多选，可留空）">
-          <div class="type-picker">
-            <button
-              v-for="t in formTypes"
-              :key="t"
-              type="button"
-              class="type-chip"
-              :class="{ on: form.project_types.includes(t) }"
-              @click="toggleType(form.project_types, t)"
-            >{{ t }}</button>
-          </div>
+          <el-select v-model="form.project_types" multiple filterable allow-create default-first-option style="width:100%" placeholder="选预设分类或输入自定义类型，可留空"><el-option v-for="t in formTypes" :key="t" :value="t" :label="t" /></el-select>
           <p class="domain-hint">只提示业务侧重点，不隔离素材；最终编制范围以招标要求为准。</p>
         </el-form-item>
+        <el-form-item label="本次服务内容"><el-input v-model="form.service_content" maxlength="2000" placeholder="招标中的具体业务，可解析后核对填写" /></el-form-item>
         <el-form-item label="项目描述">
           <el-input v-model="form.description" type="textarea" :rows="3" placeholder="标段范围、工期、主要工程量等（可选）" />
         </el-form-item>
@@ -221,7 +213,7 @@
         <p v-if="classificationError">{{ classificationError }}，可留空，稍后在项目设置中修改。</p>
         <el-form label-position="top">
           <el-form-item label="服务类型（可多选）">
-            <el-checkbox-group v-model="wizTypes"><el-checkbox v-for="t in typesFor(wizDomain)" :key="t" :label="t">{{ t }}</el-checkbox></el-checkbox-group>
+            <el-select v-model="wizTypes" multiple filterable allow-create default-first-option style="width:100%"><el-option v-for="t in serviceChoices(commonTypes, wizTypes)" :key="t" :value="t" :label="t" /></el-select>
           </el-form-item>
           <el-form-item label="测试或服务对象（可增删）">
             <el-select v-model="wizObjects" multiple filterable allow-create default-first-option style="width:100%"><el-option v-for="o in objectOptions" :key="o" :label="o" :value="o" /></el-select>
@@ -260,27 +252,24 @@
           <el-input v-model="editForm.name" size="large" />
         </el-form-item>
         <el-form-item label="应用行业">
-          <el-select v-model="editForm.domain" class="domain-select" @change="editForm.project_types = editForm.project_types.filter(t => typesFor(editForm.domain).includes(t))">
+          <el-select v-model="editForm.domain" class="domain-select">
             <el-option v-for="d in domains" :key="d.key" :label="d.name" :value="d.key" />
           </el-select>
           <p class="domain-hint">{{ domainHelp(editForm.domain) }} 修改领域会影响后续素材检索，不改已有正文。</p>
         </el-form-item>
         <el-form-item label="服务类型（可多选，可留空）">
-          <div class="type-picker">
-            <button
-              v-for="t in editFormTypes"
-              :key="t"
-              type="button"
-              class="type-chip"
-              :class="{ on: editForm.project_types.includes(t) }"
-              @click="toggleType(editForm.project_types, t)"
-            >{{ t }}</button>
-          </div>
+          <el-select v-model="editForm.project_types" multiple filterable allow-create default-first-option style="width:100%" placeholder="选预设分类或输入自定义类型，可留空"><el-option v-for="t in editFormTypes" :key="t" :value="t" :label="t" /></el-select>
           <p v-if="editingLegacy" class="domain-hint">原分类“{{ editingLegacy }}”已保留历史记录，请按业务重新选择服务类型。</p>
         </el-form-item>
+        <el-form-item label="本次服务内容"><el-input v-model="editForm.service_content" maxlength="2000" placeholder="招标中的具体业务，可解析后核对填写" /></el-form-item>
         <el-form-item label="测试或服务对象（可增删）">
           <el-select v-model="editForm.technical_objects" multiple filterable allow-create default-first-option style="width:100%"><el-option v-for="o in editForm.technical_objects" :key="o" :label="o" :value="o" /></el-select>
           <el-button link :loading="classifying" @click="suggestForSettings">从当前标段招标内容获取建议</el-button>
+          <div v-if="settingsSuggestion" class="domain-hint">
+            <p>建议具体业务：{{ settingsSuggestion.service_content || '未能识别' }}。已有服务内容不自动覆盖，请核对后保存。</p>
+            <p v-for="w in settingsSuggestion.warnings || []" :key="w">{{ w }}</p>
+            <details v-for="e in [...(settingsSuggestion.evidence || []), ...(settingsSuggestion.object_evidence || [])]" :key="e.source_id + e.name"><summary>{{ e.name }} · 查看原文依据</summary><p>{{ e.excerpt }}</p><small>{{ e.source_file }} · {{ e.source_location }}</small></details>
+          </div>
         </el-form-item>
         <el-form-item label="项目描述">
           <el-input v-model="editForm.description" type="textarea" :rows="3" />
@@ -299,8 +288,10 @@ import { onMounted, ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listProjects, createProject, updateProject, deleteProject,
-  listDomains, uploadFile, taskStatus, listLots, selectLot, classificationSuggestions } from '../api'
+  serviceTypeOptions, listDomains, uploadFile, taskStatus, listLots, selectLot, classificationSuggestions } from '../api'
 
+import {serviceChoices, existingServiceTypes, classificationImpact} from '../serviceTypes'
+const commonTypes = ref([])
 const router = useRouter()
 const projects = ref([])
 const keyword = ref('')
@@ -317,10 +308,10 @@ const showSettings = ref(false)
 const creating = ref(false)
 const saving = ref(false)
 const editingId = ref(null)
-const form = reactive({ name: '', description: '', project_types: [], technical_objects: [], domain: '' })
-const editForm = reactive({ name: '', description: '', project_types: [], technical_objects: [], domain: '' })
+const form = reactive({ name: '', description: '', project_types: [], technical_objects: [], service_content: '', domain: '' })
+const editForm = reactive({ name: '', description: '', project_types: [], technical_objects: [], service_content: '', domain: '' })
 const editingLegacy = ref('')
-const classifying = ref(false), classificationError = ref('')
+const classifying = ref(false), classificationError = ref(''), settingsSuggestion = ref(null)
 const wizTypes = ref([]), wizObjects = ref([]), objectOptions = ref([]), suggestionEvidence = ref([]), wizDomain = ref('')
 const domainHelp = key => domains.value.find(d => d.key === key)?.description || '应用行业决定素材范围，服务类型描述具体业务。'
 function toggleType(values, value) { const i = values.indexOf(value); if (i < 0) values.push(value); else values.splice(i, 1) }
@@ -328,25 +319,13 @@ function toggleType(values, value) { const i = values.indexOf(value); if (i < 0)
 const SORT_LABEL = { updated_desc: '最近更新', updated_asc: '最早更新', name: '按名称' }
 const sortLabel = computed(() => SORT_LABEL[sort.value] || '排序')
 
-// 业务类型来自领域配置；旧行业分类单独显示，不混入新的多选业务标签。
-const typeOptions = computed(() => {
-  const set = new Set()
-  for (const d of domains.value) for (const t of d.project_types || []) set.add(t)
-  for (const p of projects.value) for (const t of p.project_types || []) set.add(t)
-  return [...set]
-})
-
-// 候选按所选领域展示，类型只作为业务提示，不过滤素材。
-function typesFor(domainKey) {
-  const d = domains.value.find(x => x.key === domainKey)
-  return d?.project_types?.length ? d.project_types : typeOptions.value
+// 选择器使用共同分类，筛选器只列已保存的实际类型。
+const filterTypeOptions = computed(() => existingServiceTypes(projects.value, domainFilter.value))
+function changeDomainFilter() {
+  if (typeFilter.value && !filterTypeOptions.value.includes(typeFilter.value)) typeFilter.value = ''
 }
-const formTypes = computed(() => typesFor(form.domain))
-// 保留已选标签的可见性，领域切换后仅移除不适用项。
-const editFormTypes = computed(() => {
-  const list = typesFor(editForm.domain)
-  return [...new Set([...list, ...editForm.project_types])]
-})
+const formTypes = computed(() => serviceChoices(commonTypes.value, form.project_types))
+const editFormTypes = computed(() => serviceChoices(commonTypes.value, editForm.project_types))
 
 const filtered = computed(() => {
   let list = [...projects.value]
@@ -372,9 +351,10 @@ function applyFilter() { /* 由 computed filtered 处理 */ }
 function sortBy(cmd) { sort.value = cmd }
 
 function openCreate() {
-  // 新项目默认落在系统默认领域，用户可改
+  // 未明确行业先归通用，不继承低空示例配置或上个项目的业务选择。
   form.domain = defaultDomain.value
-  form.project_types = form.project_types.filter(t => typesFor(form.domain).includes(t))
+  form.project_types = []
+  form.service_content = ''
   wizObjects.value = []; objectOptions.value = []; suggestionEvidence.value = []; classificationError.value = ''
   wizStep.value = 0
   wizProjectId.value = null
@@ -405,6 +385,7 @@ async function create() {
     form.name = ''
     form.description = ''
     form.project_types = []
+    form.service_content = ''
     form.technical_objects = []
     form.domain = defaultDomain.value  // 清表单但保留默认领域，下次新建仍是它
     ElMessage.success('项目已创建，请上传招标文件')
@@ -485,7 +466,9 @@ async function suggestForSettings() {
   classifying.value = true
   try {
     const { data } = await classificationSuggestions(editingId.value)
-    editForm.project_types = [...new Set([...editForm.project_types, ...(data.project_types || []).filter(t => typesFor(editForm.domain).includes(t))])]
+    settingsSuggestion.value = data
+    if (!editForm.service_content) editForm.service_content = data.service_content || ''
+    editForm.project_types = [...new Set([...editForm.project_types, ...(data.project_types || [])])]
     editForm.technical_objects = [...new Set([...editForm.technical_objects, ...(data.technical_objects || [])])]
     ElMessage.info('建议已加入表单，可增删；保存后生效')
   } catch (e) { ElMessage.error(e?.response?.data?.detail || e.message) }
@@ -508,10 +491,12 @@ function cleanupWizard() {
 
 function onCardMenu(cmd, p) {
   if (cmd === 'settings') {
+    settingsSuggestion.value = null
     editingId.value = p.id
     editForm.name = p.name || ''
     editForm.project_types = [...(p.project_types || [])]
     editForm.technical_objects = [...(p.technical_objects || [])]
+    editForm.service_content = p.service_content || ''
     editingLegacy.value = p.legacy_project_type || ''
     editForm.description = p.description || ''
     editForm.domain = p.domain || defaultDomain.value
@@ -532,7 +517,7 @@ async function saveSettings() {
   saving.value = true
   try {
     await updateProject(editingId.value, { ...editForm })
-    ElMessage.success('已保存')
+    ElMessage.info(classificationImpact(projects.value.find(p => p.id === editingId.value) || {}, editForm))
     showSettings.value = false
     await load()
   } catch (e) {
@@ -568,11 +553,12 @@ async function loadDomains() {
   try {
     const { data } = await listDomains()
     domains.value = data.items || []
-    defaultDomain.value = data.default || ''
+    defaultDomain.value = domains.value.some(d => d.key === 'softtest') ? 'softtest' : ''
   } catch (e) { /* 领域清单取不到不影响项目列表 */ }
 }
 
 onMounted(async () => {
+  try { commonTypes.value = (await serviceTypeOptions()).data.items } catch { ElMessage.warning('预设服务类型加载失败，仍可自行输入') }
   await loadDomains()
   form.domain = defaultDomain.value
   await load()

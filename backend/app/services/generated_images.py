@@ -11,12 +11,16 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
+from app.services.image_prompt import visual_style
+
+VISUAL_CHECK_VERSION = 2
 
 _locks: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
 _slots = threading.BoundedSemaphore(max(1, settings.image_generation_concurrency))
 _EVIDENCE = re.compile(r"现场照片|实拍|真实照片|截图|界面|扫描件|证照|证书|资质|检测报告|检测证明|实测|签字|盖章")
-from app.services.image_planning import RELATION as _RELATION, TABLE as _TABLE
+_PROOF = re.compile(r'扫描件|证照|证书|资质|检测报告|检测证明|实测|签字|盖章|原件|真实证明|采购人提供|客户提供')
+from app.services.image_planning import RELATION as _RELATION, TABLE as _TABLE, DATA_CHART
 
 
 class ImageGenerationError(RuntimeError):
@@ -26,11 +30,20 @@ class ImageGenerationError(RuntimeError):
 def eligible(need: dict) -> bool:
     if not isinstance(need, dict):
         return False
+    from app.services.image_planning import representation, legacy_tabular
+    if legacy_tabular(need):
+        return False
+    mode = representation(need)
+    if mode in {'material','table','gantt','mermaid'}:
+        return False
     source = need.get("source")
-    if source != "illustration" and not (source == "history" and need.get("allow_generated") is True):
+    if source not in {"illustration", "material"} and not (source == "history" and need.get("allow_generated") is True):
         return False
     text = str(need.get("name") or "") + " " + str(need.get("purpose") or "")
-    return bool(str(need.get("name") or "").strip()) and not _EVIDENCE.search(text) and not _RELATION.search(text) and not _TABLE.search(str(need.get('name') or ''))
+    if _PROOF.search(text):
+        return False
+    # 场景、实物和界面可以先提供明确标识的概念替代，不能冒充实拍或现有系统。
+    return bool(str(need.get("name") or "").strip()) and (mode == 'illustration' or (not _RELATION.search(text) and not _TABLE.search(str(need.get('name') or '')) and not DATA_CHART.search(str(need.get('name') or ''))))
 
 
 def _connection() -> tuple[str, str]:
@@ -53,20 +66,26 @@ def _connection() -> tuple[str, str]:
     return endpoint, key
 
 
-def _request_image(prompt: str) -> bytes:
+def _request_image(prompt: str, size: str | None = None, reference_image: str | None = None) -> bytes:
     from app.services.llm import _client
 
     endpoint, key = _connection()
+    content = ([{"image":reference_image}] if reference_image else []) + [{"text":prompt}]
     payload = {"model": settings.image_generation_model,
-               "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
-               "parameters": {"size": settings.image_generation_size, "n": 1,
+               "input": {"messages": [{"role": "user", "content": content}]},
+               "parameters": {"size": size or settings.image_generation_size, "n": 1,
                               "prompt_extend": False, "watermark": False}}
     # 付费提交不自动重试，避免网络超时后重复提交、重复计费。
     try:
         with _client(timeout=settings.image_generation_timeout) as client:
             response = client.post(endpoint, headers={"Authorization": "Bearer " + key}, json=payload)
             if response.status_code != 200:
-                raise ImageGenerationError(f"图像服务 HTTP {response.status_code}，请检查模型权限、Key 和余额")
+                try:
+                    code = str(response.json().get('code') or '')
+                    code = code if re.fullmatch(r'[A-Za-z0-9_.-]{1,100}',code) else ''
+                except (ValueError, AttributeError):
+                    code = ''
+                raise ImageGenerationError(f"图像服务 HTTP {response.status_code}" + (f"（{code}）" if code else '') + '；请按服务错误码核对请求参数、权限或额度')
             data = response.json()
             parts = data.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content", [])
             url = next((p["image"] for p in parts if p.get("image")), "")
@@ -97,6 +116,15 @@ def _directory(project_id: int) -> Path:
     return settings.uploads_dir / "generated" / f"project_{int(project_id)}"
 
 
+def review_reason(asset):
+    """自动主题检查不代替人工验收；老图在读侧补提示，不批改历史文件。"""
+    if not asset.get('generated'):return str(asset.get('review_reason') or '')
+    if asset.get('review_reason'):return str(asset['review_reason'])
+    if asset.get('visual_check_version',0)<VISUAL_CHECK_VERSION:
+        return '旧生成图未检查风格、透视和实物合理性，请人工核对；主题文字通过不代表画面合格'
+    return 'AI生成图需人工确认风格、透视与实物合理性；自动检查通过不等于人工验收'
+
+
 def catalog(project_id: int) -> list[dict]:
     from app.services.image_retrieval import image_identity
 
@@ -111,6 +139,8 @@ def catalog(project_id: int) -> list[dict]:
             if not path.is_file() or record.get("asset_id") != image_identity(path):
                 continue
             record["path"] = path
+            if record.get("generated"):
+                record.update(review_pending=True,review_reason=review_reason(record))
             out.append(record)
         except Exception:
             continue
@@ -129,15 +159,17 @@ def validate_visual(path: Path, need: dict) -> None:
         buf = io.BytesIO()
         im.save(buf, format='JPEG', quality=90)
     result = extract_json(llm.chat([{'role':'user','content':[
-        {'type':'text','text':'核查这张生成概念插图是否准确表现下述场景，不接受仅色调相似。'
+        {'type':'text','text':'核查这张AI生成场景是否符合需求。不接受仅色调相似；检查透视、比例、物体结构、摆放与空间关系，拒绝拼贴、不合理悬浮或设备变形。'
+         '画面风格必须符合：'+visual_style(need)+'。'
          '同时检查有无任何可见文字、乱码、字母标签或水印。只输出JSON：'
-         '{"relevant":true,"has_text":false,"reason":""}。需求：'
+         '{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"reason":""}。需求：'
          +str(need.get('name') or '')+'；'+str(need.get('purpose') or '')},
         {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+
          base64.b64encode(buf.getvalue()).decode()}}]}], model=settings.vision_model,
          temperature=0, max_tokens=500, timeout=60))
-    if result.get('relevant') is not True or result.get('has_text') is not False:
-        raise ImageGenerationError('生成图未通过主题/文字核验：'+str(result.get('reason') or '需重新检查')[:150])
+    if (result.get('relevant') is not True or result.get('has_text') is not False
+            or result.get('style_matches') is not True or result.get('physical_plausible') is not True):
+        raise ImageGenerationError('生成图未通过主题、文字、风格或实物合理性核验：'+str(result.get('reason') or '需重新检查')[:150])
 
 
 def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
@@ -149,24 +181,42 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
     if not eligible(need):
         raise ImageGenerationError("此配图需要真实材料或应由 Mermaid 绘制")
     caption = str(need["name"]).strip()
-    visual_prompt = (str(need.get('prompt') or '')+'。'+str(need.get('purpose') or ''))[:1000]
-    visual_prompt = re.sub(r"[^，,。；\n]*(?:标注|文字|标签|水印|logo)[^，,。；\n]*(?:[，,。；\n]|$)",
-                           "", visual_prompt, flags=re.I).strip()
-    # 引号包裹的链路名等常被模型直接写进图；去掉这种标签指令，保留独立场景描述。
-    visual_prompt = re.sub(r'[^，,。；\n]*[‘“][^’”]+[’”][^，,。；\n]*(?:[，,。；\n]|$)',
-                           '',visual_prompt).strip()
-    prompt = (
-        'One clean conceptual illustration, white background, blue-gray objects, horizontal composition. '
-        'Only depict visible objects and spatial arrangements, not a presentation slide or an infographic. '
-        + (visual_prompt or ('Visual subject only, do not print these words: '+caption))
-        + '\nOnly the illustration itself. No writing, no title, no subtitles, no paragraphs, no tables, '
-        'no letters, no numbers, no charts, no diagrams, no labels, no logos, no real certificates or signatures. '
-        'This is a proposed concept, never a photograph or evidence of an existing facility.'
-    )
-    version = json.dumps({"model": settings.image_generation_model, "size": settings.image_generation_size,
-                          "validation_version": 1,
+    size = need.get('_generation_size') or settings.image_generation_size
+    substitute = need.get('source') == 'material' or bool(_EVIDENCE.search(caption))
+    if substitute:
+        caption = re.sub(r'真实照片|现场照片|实拍|照片|截图', '概念示意', caption)
+        caption += '（非实拍、非真实系统记录）'
+    from app.services.image_prompt import build_prompt
+    reference_image = None
+    reference_hash = None
+    if need.get('_reference_image_path'):
+        if not settings.image_generation_model.startswith('qwen-image-2.0'):
+            raise ImageGenerationError('当前图像模型尚未接入原图编辑，未退回文字重画；请更换支持的编辑模型')
+        import base64
+        reference_path = Path(need['_reference_image_path']).resolve()
+        if not reference_path.is_relative_to(Path(settings.uploads_dir).resolve()):
+            raise ImageGenerationError('原图不在素材目录，未发送编辑请求')
+        if not reference_path.is_file() or reference_path.stat().st_size > 10*1024*1024:
+            raise ImageGenerationError('原图不存在或超过编辑接口10MB限制')
+        reference_hash = image_identity(reference_path)
+        if reference_hash != need.get('_edit_source_asset_id'):
+            raise ImageGenerationError('原图内容已经变化，请刷新素材后重新编辑')
+        # 保留原图像素；仅为API传输编码，不另做图像修补。
+        with Image.open(reference_path) as reference:
+            mime = Image.MIME.get(reference.format)
+        if mime not in {'image/png','image/jpeg','image/webp','image/bmp','image/tiff','image/gif'}:
+            raise ImageGenerationError('原图格式不支持编辑')
+        reference_image = 'data:'+mime+';base64,'+base64.b64encode(reference_path.read_bytes()).decode()
+    try: prompt = build_edit_prompt(need) if reference_image else build_prompt(need,settings.image_generation_model)
+    except ValueError as exc: raise ImageGenerationError(str(exc)) from None
+    version = json.dumps({"model": settings.image_generation_model, "size": size,
+                          "validation_version": VISUAL_CHECK_VERSION,
                           "endpoint": _connection()[0], "prompt": prompt, "caption": caption,
                           "context": body[:1800]}, ensure_ascii=False, sort_keys=True)
+    if reference_hash:
+        version += '|edit-v1|' + reference_hash
+    if need.get('_request_id'):
+        version += str(need['_request_id'])
     cache_key = hashlib.sha256(version.encode()).hexdigest()
     root = _directory(project_id)
     with _guard:
@@ -177,7 +227,11 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
             try:
                 record = json.loads(manifest.read_text(encoding="utf-8"))
                 if record.get('rejected'):
-                    raise ImageGenerationError(record.get('reason') or '该生成图未通过核验，未重复付费提交')
+                    # 已付费且文件有效的旧驳回图转为人工待核对，绝不再次收费生成。
+                    record = _record(project_id,node_id,path,caption,need,prompt,False,
+                                     record.get('reason') or '旧核验未通过，需人工检查',substitute)
+                    manifest.write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding='utf-8')
+                    return record
                 if record.get("asset_id") == image_identity(path):
                     return record
             except ImageGenerationError:
@@ -185,7 +239,10 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
             except Exception:
                 pass
         with _slots:
-            data = _request_image(prompt)
+            if reference_image:
+                data = _request_image(prompt, size, reference_image=reference_image)
+            else:
+                data = _request_image(prompt, size) if need.get('_generation_size') else _request_image(prompt)
         try:
             with Image.open(io.BytesIO(data)) as image:
                 if image.width * image.height > 16_000_000:
@@ -199,21 +256,65 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
                 temp.replace(path)
         except Exception as exc:
             raise ImageGenerationError(f"生成结果不是有效图片（{type(exc).__name__}）") from None
+        validated, review_reason = True, ''
         try:
             validate_visual(path, need)
         except Exception as exc:
-            reason = str(exc) if isinstance(exc, ImageGenerationError) else '生成图视觉核验暂不可用，需人工检查'
-            manifest.write_text(json.dumps({'project_id':int(project_id), 'rejected':True,
-                                           'reason':reason},ensure_ascii=False),encoding='utf-8')
-            raise ImageGenerationError(reason) from None
-        record = {"project_id": int(project_id), "node_id": int(node_id), "asset_id": image_identity(path),
-                  "validated": True,
-                  "caption": caption + "（AI生成示意）", "kind": "illustration", "generated": True,
-                  "url": "/uploads/" + path.relative_to(settings.uploads_dir).as_posix(),
-                  "content": str(need.get("purpose") or "概念示意插图"),
-                  "source_title": "AI生成示意图", "page_id": 0, "doc_id": None,
-                  "model": settings.image_generation_model, "prompt": prompt}
+            validated = False
+            review_reason = str(exc) if isinstance(exc, ImageGenerationError) else '生成图视觉核验暂不可用，需人工检查'
+        record = _record(project_id,node_id,path,caption,need,prompt,validated,review_reason,substitute)
         temp = root / (cache_key + ".json.tmp")
         temp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(manifest)
         return record
+
+
+def _record(project_id,node_id,path,caption,need,prompt,validated,reason,substitute):
+    from app.services.image_retrieval import image_identity
+    from PIL import Image
+    with Image.open(path) as image:
+        image.verify()
+    if re.search(r'数据.*(?:图|曲线)|图表|统计图',caption):
+        caption += '（数据仅作示例，非实测结果）'
+    return {"project_id": int(project_id), "node_id": int(node_id), "asset_id": image_identity(path),
+              "validated": validated, "review_pending": True, "visual_check_version": VISUAL_CHECK_VERSION,
+              "visual_style": visual_style(need),
+              "review_reason": reason or ('使用AI概念替代，需确认是否仍需真实图片' if substitute else 'AI生成图需人工确认风格、透视与实物合理性；自动检查通过不等于人工验收'),
+              "caption": caption + "（AI生成示意）", "kind": "illustration", "generated": True,
+              "url": "/uploads/" + path.relative_to(settings.uploads_dir).as_posix(),
+              "content": str(need.get("purpose") or "概念示意插图"),
+              "generation_need": {k:need.get(k) for k in ('name','purpose','prompt','source','_feedback','content_origin','data_structure','visual_style','_edit_source_asset_id')},
+              "source_title": "AI生成示意图", "page_id": 0, "doc_id": None,
+              "model": settings.image_generation_model, "prompt": prompt}
+
+
+def build_edit_prompt(need):
+    feedback = str(need.get('_feedback') or '').strip()
+    if not feedback:
+        raise ValueError('请说明希望修改当前图的哪个部分')
+    prompt = ('请编辑输入的原图，不要重新设计整张图。仅按以下修改意见调整；未提及的主体、构图、视角、'
+              '颜色和已有细节尽量保持一致，不额外添加图题、说明文字或水印。'
+              '修改意见优先于原始绘图描述。用户修改意见：'+feedback)
+    if len(prompt.encode('utf-8')) > 3600:
+        raise ValueError('修改意见过长，请缩短为需要修改和保留的重点')
+    return prompt
+
+
+def describe_redesign(path, feedback, name, purpose):
+    import base64
+    from PIL import Image
+    from app.services.llm import llm
+    from app.agents.json_util import extract_json
+    with Image.open(path) as im:
+        im=im.convert('RGB');im.thumbnail((1280,1280))
+        buf=io.BytesIO();im.save(buf,format='JPEG',quality=90)
+    result=extract_json(llm.chat([{'role':'user','content':[
+        {'type':'text','text':'查看当前图片，结合用途与修改意见，写一段完整的新场景绘图描述。'
+         '这是重新设计，不必保留旧构图；用户指出要去除的元素不能带入新图。'
+         '只输出JSON {"prompt":"不超过200字的绘图描述"}。不编造真实证明，不生成图内标题或标签。'
+         +json.dumps({'图名':name,'用途':purpose,'用户意见':feedback},ensure_ascii=False)},
+        {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(buf.getvalue()).decode()}}
+    ]}],model=settings.vision_model,temperature=0,max_tokens=600,timeout=60))
+    prompt=str(result.get('prompt') or '').strip()
+    if not prompt:raise ImageGenerationError('未能整理重新设计要求')
+    return prompt

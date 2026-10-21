@@ -40,6 +40,8 @@ app.include_router(knowledge.router)
 app.include_router(experience.router)
 app.include_router(facts.router)
 app.include_router(sections.router)
+from app.api import image_assets
+app.include_router(image_assets.router)
 app.include_router(export.router)   # 导出 Word 交付件（app/services/docx_export.py）
 # 进度图表 / 质检 / 招标解析三个功能已按需求移除（2026-09-10）：
 # - 前端入口与抽屉、qc/charts 的后端接口一并删除；

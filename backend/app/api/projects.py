@@ -17,6 +17,7 @@ class ProjectCreate(BaseModel):
     domain: str = ""        # 领域（app/core/domains.py key）；空=系统默认领域
     project_types: list[str] | None = None
     technical_objects: list[str] | None = None
+    service_content: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -26,6 +27,7 @@ class ProjectUpdate(BaseModel):
     project_type: str | None = None
     project_types: list[str] | None = None
     technical_objects: list[str] | None = None
+    service_content: str | None = None
 
 
 @router.get("")
@@ -72,20 +74,27 @@ def create_project(body: ProjectCreate):
 
     # 未知 key 回退默认领域（避免脏领域进库）**并打一条警告**——静默回退是 2026-10-15
     # 那个跨域 bug 的成因，见 domains._fallback_domain
-    dom = get_domain(body.domain)
+    dom = get_domain(body.domain or "softtest")
     from app.services.project_classification import validate_types, validate_objects
     try:
         types=validate_types(body.project_types,dom.key) if body.project_types is not None else None
         objects=validate_objects(body.technical_objects) if body.technical_objects is not None else None
     except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+    if len(body.service_content or '')>2000:raise HTTPException(400,'本次服务内容不能超过2000字')
     if not body.name.strip():raise HTTPException(400,'请填写项目名称')
     now = datetime.now()
     pid = execute(
-        "INSERT INTO project (name, description, project_type, domain, project_types, technical_objects, status, created_at, updated_at)"
-        " VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, %s)",
-        (body.name, body.description, body.project_type, dom.key,json.dumps(types,ensure_ascii=False) if types is not None else None,json.dumps(objects,ensure_ascii=False) if objects is not None else None, now, now),
+        "INSERT INTO project (name, description, project_type, domain, project_types, technical_objects, service_content, status, created_at, updated_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s, %s)",
+        (body.name, body.description, body.project_type, dom.key,json.dumps(types,ensure_ascii=False) if types is not None else None,json.dumps(objects,ensure_ascii=False) if objects is not None else None, (body.service_content or '').strip(), now, now),
     )
     return {"id": pid, "domain": dom.key}
+
+
+@router.get('/service-type-options')
+def service_type_options():
+    from app.services.project_classification import SERVICE_TYPES
+    return {'items': list(SERVICE_TYPES)}
 
 
 @router.get("/{project_id}")
@@ -101,7 +110,16 @@ def get_project(project_id: int):
 def classification_suggestions(project_id: int):
     from app.services.project_classification import suggestions
     try:return suggestions(project_id)
-    except ValueError as exc:raise HTTPException(404,str(exc)) from exc
+    except ValueError as exc:raise HTTPException(409,str(exc)) from exc
+    except Exception as exc:raise HTTPException(502,'业务提取失败，已保存结果保留，请稍后重试') from exc
+
+
+@router.post('/{project_id}/classification-suggestions/refresh')
+def refresh_classification_suggestions(project_id: int):
+    from app.services.project_classification import suggestions
+    try:return suggestions(project_id, refresh=True)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from exc
+    except Exception as exc:raise HTTPException(502,'重新提取失败，已保存结果保留，请稍后重试') from exc
 
 
 @router.patch("/{project_id}")
@@ -113,7 +131,10 @@ def update_project(project_id: int, body: ProjectUpdate):
     from app.services.project_classification import validate_types,validate_objects
     fields=body.model_fields_set
     domain=get_domain(body.domain).key if 'domain' in fields else current['domain']
-    changes={k:getattr(body,k) for k in ('name','description','project_type') if k in fields}
+    changes={k:getattr(body,k) for k in ('name','description','project_type','service_content') if k in fields}
+    if 'service_content' in changes:
+        changes['service_content']=(changes['service_content'] or '').strip()
+        if len(changes['service_content'])>2000:raise HTTPException(400,'本次服务内容不能超过2000字')
     if 'name' in changes and not (changes['name'] or '').strip():raise HTTPException(400,'请填写项目名称')
     if 'domain' in fields:changes['domain']=domain
     try:

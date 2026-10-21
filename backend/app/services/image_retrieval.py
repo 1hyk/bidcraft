@@ -86,9 +86,10 @@ def candidates(node: dict, assets: list[dict], limit: int = 6) -> list[dict]:
     terms = _terms(need)
     title_terms = _terms(node.get("title") or "")
     ranked = []
+    from app.services.generated_images import VISUAL_CHECK_VERSION
     for asset in assets:
         # 老版本生成图保留给已有正文导出，但没有视觉核验的不能作为新稿候选复用。
-        if asset.get('generated') and not asset.get('validated'):
+        if asset.get('generated') and (not asset.get('validated') or asset.get('visual_check_version',0)<VISUAL_CHECK_VERSION):
             continue
         description = _terms(asset["caption"] + " " + str(asset["content"]))
         score = len(terms & description) / math.sqrt(max(1, len(terms) * len(description)))

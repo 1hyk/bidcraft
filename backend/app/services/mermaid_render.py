@@ -123,9 +123,10 @@ try {
           if (!svg) return failAt(i);
           var box = svg.getBoundingClientRect();
           if (!box.width || !box.height) return failAt(i);
-          // 超出上限就等比缩进去（只缩不放），否则会被视口裁掉
-          var k = Math.min(1, MAXW / box.width, MAXH / box.height);
-          if (k < 1) {
+          // 在SVG阶段按比例填满截图预算，小图也必须获得打印所需像素。
+          // 这里放大的是矢量几何，不能等截图成PNG以后再拉伸。
+          var k = Math.min(MAXW / box.width, MAXH / box.height);
+          if (k > 0) {
             svg.style.maxWidth = 'none';
             svg.style.width = (box.width * k) + 'px';
             svg.style.height = (box.height * k) + 'px';
@@ -171,7 +172,7 @@ def available() -> bool:
 def _cache_path(src: str) -> Path:
     """源码 → 缓存文件路径。key 里带上主题/倍率/字体，改这些参数会自动失效重渲。"""
     digest = hashlib.sha1(
-        f"{_THEME}|{_SCALE}|{_FONT}|{json.dumps(_FLOWCHART, sort_keys=True)}|{json.dumps(_THEME_VARIABLES, sort_keys=True)}|{src}".encode("utf-8")
+        f"vector-fit-v2|{_MAX_W}|{_MAX_H}|{_THEME}|{_SCALE}|{_FONT}|{json.dumps(_FLOWCHART, sort_keys=True)}|{json.dumps(_THEME_VARIABLES, sort_keys=True)}|{src}".encode("utf-8")
     ).hexdigest()[:16]
     return settings.uploads_dir / "mermaid" / datetime.now().strftime("%Y%m") / f"{digest}.png"
 

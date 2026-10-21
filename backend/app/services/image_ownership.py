@@ -354,6 +354,9 @@ class ProjectImages(dict):
         if "素材ID" in raw:
             # 明确绑定了 ID 却不可用时，不许回退同名的另一张图。
             asset = self.assets.get(bound.group(1)) if bound else None
+            if asset and '|自定义图注=1' in raw:
+                from app.services.image_caption import reference_caption
+                return reference_caption(raw.split('|',1)[0].strip(),asset),asset['path']
             return (asset["caption"], asset["path"]) if asset else ("", None)
         if raw in self:
             return raw, self[raw]
