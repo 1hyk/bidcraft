@@ -121,6 +121,8 @@ TASKS = [
         "prompt": _req_prompt(
             "{G_FULL}相关的评分办法（技术评分项）",
             "识别「评分办法/评标办法/评分标准/评审标准/技术评分/{G_BID}评分」相关内容；"
+            "只提取与{G_FULL}编制直接相关的技术评分项；业绩、资格、资质、商务、报价/价格、"
+            "财务、信用、联合体等商务评审项一律不提取，即使它们和技术评分项在同一张评分表里。"
             "逐项提取：评分项名称（保留原文专业术语）、weight=分值（纯数字，无明确分值给 null）、"
             "评分标准原文要点、出处。表格形式的评分表逐行拆成条目。无明确分值区间说明的按最接近分值记录。",
         ),
@@ -186,8 +188,13 @@ def _run_task(task: dict, markdown: str, doc_name: str, domain: str = "") -> lis
         if not isinstance(item, dict):
             continue
         r = _sanitize(item, task["category"])
-        if r:
-            out.append(r)
+        if not r:
+            continue
+        if task["category"] == "评分办法":
+            from app.services.requirement_matrix import response_scope
+            if response_scope(r) != "technical":
+                continue
+        out.append(r)
     return out
 
 
@@ -241,6 +248,11 @@ def extract_requirements(markdown: str, doc_name: str = "", domain: str = "") ->
     for r in reqs:
         if r["weight"] is not None:
             r["category"] = "评分办法"
+
+    # 统一兜底：商务评审项（业绩/价格/资格等）即使带分值也不归技术评分。
+    from app.services.requirement_matrix import response_scope
+    reqs = [r for r in reqs
+            if r["category"] != "评分办法" or response_scope(r) == "technical"]
 
     # 自检：评分条目分值合计
     score_items = [r for r in reqs if r["category"] == "评分办法" and r["weight"] is not None]

@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 from app.core.config import settings
 from app.core.database import query_one
 from app.services import generated_images
+from app.services.image_prompt import style_from_feedback
 from app.services.image_retrieval import catalog, image_identity
 
 router = APIRouter(prefix='/api/projects/{project_id}/image-assets', tags=['image-assets'])
@@ -31,6 +32,18 @@ def public(asset):
 def check_project(project_id):
     if not query_one('SELECT id FROM project WHERE id=%s',(project_id,)):
         raise HTTPException(404,'项目不存在')
+
+
+def _outline_need(project_id:int,node_id:int,name:str):
+    """按图名取当前章节思路里的配图定义，用于兼容没有语义分类的旧素材。"""
+    row=query_one('SELECT outline FROM chapter_node WHERE id=%s AND project_id=%s',(node_id,project_id)) or {}
+    outline=row.get('outline') or {}
+    if isinstance(outline,str):
+        try: outline=json.loads(outline)
+        except ValueError: return None
+    matches=[n for n in outline.get('image_needs') or []
+             if name.startswith(str(n.get('name') or '\0'))]
+    return matches[0] if len(matches)==1 else None
 
 
 @router.get('')
@@ -82,31 +95,44 @@ def regenerate(project_id:int, body:Regenerate):
     if body.quality=='high' and not settings.image_generation_model.startswith('qwen-image-2.0'):
         raise HTTPException(400,'当前模型尚未验证高清尺寸，请选择标准清晰度')
     name = str(asset.get('caption') or '').split('（AI生成')[0]
-    from app.services.image_planning import TABLE, DATA_CHART, RELATION
+    from app.services.image_planning import TABLE, DATA_CHART, RELATION, regeneration_style
     if TABLE.search(name) or DATA_CHART.search(name) or RELATION.search(name):
         raise HTTPException(400,'这张内容应使用可编辑表格或Mermaid，不能靠位图重生成修正文字和数据；请替换为对应表格或图表。')
     original=asset.get('generation_need') or {}
+    outline_need=_outline_need(project_id,body.node_id,name)
     if not original:
-        row=query_one('SELECT outline FROM chapter_node WHERE id=%s AND project_id=%s',(body.node_id,project_id)) or {}
-        outline=row.get('outline') or {}
-        if isinstance(outline,str): outline=json.loads(outline)
-        matches=[n for n in outline.get('image_needs') or [] if name.startswith(str(n.get('name') or '\0'))]
-        if len(matches)==1: original=matches[0]
+        original=outline_need or {}
+    elif outline_need and original.get('data_structure') not in {'physical_scene','spatial_layout'}:
+        # 旧素材没有新的语义分类时，用当前章节思路里的分类纠正，不按图名猜。
+        original={**original,'data_structure':outline_need.get('data_structure') or original.get('data_structure')}
     need={'name':name,'source':'illustration','purpose':'用于说明本项目拟议场景与空间安排',
           'prompt':f"原始用途：{str(original.get('purpose') or asset.get('content') or '')[:400]}。原始绘图要求：{str(original.get('prompt') or '')[:600]}。清晰边缘、简洁构图，避免密集细节。没有明确地图需求时，不要以宏观地图替代具体场景。",
+          'data_structure':original.get('data_structure') or '',
+          'content_origin':original.get('content_origin') or '',
           '_feedback':body.feedback,
           '_request_id':body.request_id}
     from app.services.image_vision import local_path_of
     original_path = local_path_of(asset.get('url') or '')
     if original_path is None:
         raise HTTPException(400,'当前原图文件不可用，请刷新素材或重新上传；未执行文字重画')
+    previous_style=original.get('visual_style') or asset.get('visual_style') or ''
+    feedback_style=style_from_feedback(body.feedback)
+    try:
+        resolved_style=regeneration_style(original,feedback_style,previous_style)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from None
     need.update(_reference_image_path=str(original_path),_edit_source_asset_id=asset['asset_id'],
-                visual_style=original.get('visual_style') or asset.get('visual_style') or 'photorealistic')
-    if body.mode=='redesign':
+                visual_style=resolved_style)
+    mode=body.mode
+    if previous_style and resolved_style!=previous_style:
+        # 换画风（如实物图→示意图）必须重画，拿旧图编辑改不过来。
+        mode='redesign'
+    if mode=='redesign':
         # 先看当前图并结合反馈整理场景描述，用户无需自己写完整生图提示。
         from app.services.generated_images import describe_redesign
         try:
-            need['prompt']=describe_redesign(original_path,body.feedback,name,original.get('purpose') or '')
+            need['prompt']=describe_redesign(original_path,body.feedback,name,
+                                             original.get('purpose') or '',resolved_style)
         except Exception:
             raise HTTPException(502,'当前图片分析失败，未提交付费生图，请稍后重试') from None
         need.pop('_reference_image_path',None)

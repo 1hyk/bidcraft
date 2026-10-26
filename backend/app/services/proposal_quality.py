@@ -60,14 +60,16 @@ def claim_excerpts(text):
 def chapters(project_id):
     from app.services.section_service import generation_node_ids
     allowed=generation_node_ids(project_id)
-    rows=query('SELECT n.id,n.title,c.content,EXISTS(SELECT 1 FROM chapter_node child WHERE child.project_id=n.project_id AND child.parent_id=n.id) AS has_children FROM chapter_node n LEFT JOIN section_content c ON c.chapter_node_id=n.id WHERE n.project_id=%s ORDER BY n.id',(project_id,))
+    rows=query('SELECT n.id,n.title,n.parent_id,n.outline,c.content,EXISTS(SELECT 1 FROM chapter_node child WHERE child.project_id=n.project_id AND child.parent_id=n.id) AS has_children FROM chapter_node n LEFT JOIN section_content c ON c.chapter_node_id=n.id WHERE n.project_id=%s ORDER BY n.id',(project_id,))
     for row in rows:
         if row['id'] not in allowed: continue
         payload=row.get('content') or {}
         if isinstance(payload,str):payload=json.loads(payload)
         row['payload']=payload
         body=payload.get('body') or ''
-        if payload.get('format')=='html':
+        # 历史正文存在 format=md 但内容已是 HTML 的混存；导出按内容识别，
+        # 检查也必须一致，否则 data-code/style 属性里的颜色号会被当成正文要求编号。
+        if payload.get('format')=='html' or body.lstrip().startswith('<'):
             import lxml.html
             try: body=lxml.html.fromstring('<div>'+body+'</div>').text_content()
             except Exception: pass
@@ -150,7 +152,14 @@ def check(project_id):
                     missing_images+=1;add('missing_image','图片未找到可用文件',name)
             else:
                 from app.services.image_retrieval import image_identity
-                refs[image_identity(path)].append(row)
+                asset_id=image_identity(path)
+                refs[asset_id].append(row)
+                # 历史图（非本项目生成）不会像 AI 图那样自带待核对标记；插进正文后
+                # 检查页必须能看到，否则"图选得对不对"没有任何提示。
+                if asset_id not in generated_by_id:
+                    add('image_review','历史素材：请核对图片内容是否适用于本章；不得作为本项目实证',
+                        name.split('|')[0].strip())
+                    issues[-1]['asset_id']=asset_id
         for excerpt in claim_excerpts(text):
             add('claim_review','已有能力或核查结论须有本单位真实证据；招标要求不能替代证明',excerpt)
         for contact in contacts:
@@ -259,10 +268,13 @@ def review(project_id):
     selected={};tasks=[];allowed={}
     for req in reqs:
         terms=_terms(req['title']+' '+req['content'])
+        # 不按人工安排的章节收窄证据池：逐条要求在全稿范围内找证据，避免安排漏项掩盖实际缺项。
         ranked=sorted(fragments.values(),key=lambda f:len(terms & _terms(f['chapter']+' '+f['text'])),reverse=True)[:10]
         selected.update({f['id']:f for f in ranked})
         allowed[req['id']]=[f['id'] for f in ranked]
-        tasks.append({**{k:req.get(k) for k in ('id','title','category','content')},'allowed_evidence_ids':allowed[req['id']]})
+        task={**{k:req.get(k) for k in ('id','title','category','content')},
+              'allowed_evidence_ids':allowed[req['id']]}
+        tasks.append(task)
     def one(batch):
         ids={identity for task in batch for identity in task['allowed_evidence_ids']}
         try:

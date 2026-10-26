@@ -138,6 +138,17 @@ def confirm_all(project_id: int) -> int:
 REQUIREMENT_WRITE_CATEGORIES = {"评分办法", "技术要求", "编制要求", "废标风险"}
 
 
+def is_technical_requirement(row: dict) -> bool:
+    """该要求是否应由技术标目录/正文承接。
+
+    商务、资格、业绩、价格评审等由其他响应文件或资格附件承接；即使被抽成
+    「评分办法」，也不能进入技术目录和逐章正文（2026-10-22 项目31 的「业绩」章）。
+    """
+    from app.services.requirement_matrix import response_scope
+
+    return response_scope(row) == "technical"
+
+
 def requirements_for_chapter(project_id: int, title: str, limit: int = 8) -> list[dict]:
     """按章取相关招标要求（评分/技术/编制/废标四类）：按 suggested_chapter 命中 + 类别过滤，
     无命中返回空；confirmed 优先，pending 其次。
@@ -156,6 +167,7 @@ def requirements_for_chapter(project_id: int, title: str, limit: int = 8) -> lis
     )
     rows = _lot_filter(rows, project_id)
     rows = [r for r in rows if r["category"] in REQUIREMENT_WRITE_CATEGORIES]
+    rows = [r for r in rows if is_technical_requirement(r)]
     from app.core import chapter_title
 
     t = (title or "").strip()
@@ -214,7 +226,8 @@ def requirements_text(project_id: int, limit: int = 30) -> str:
         " ORDER BY FIELD(status, 'confirmed', 'pending'), category, id",
         (project_id,),
     )
-    rows = _lot_filter(rows, project_id)[:limit]
+    rows = _lot_filter(rows, project_id)
+    rows = [r for r in rows if is_technical_requirement(r)][:limit]
     lines = []
     for r in rows:
         w = f"（{r['weight']:g} 分）" if r.get("weight") is not None else ""

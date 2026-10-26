@@ -140,13 +140,13 @@ const editor = useEditor({
     Mermaid.configure({projectId:props.projectId,nodeId:props.nodeId,onChanged:()=>nextTick(()=>{
       if(props.generating || props.externalLocked)return
       dirtyForExternalEdit=true
-      emit('save',editor.value?.getHTML() || '',true)
+      emit('save',normalizeFigureCaptions(editor.value?.getHTML() || ''),true)
     })}),
     PageReference.configure({projectId:props.projectId}),
     MaterialImage.configure({projectId:props.projectId,nodeId:props.nodeId,onChanged:()=>nextTick(()=>{
       if(props.generating || props.externalLocked)return
       dirtyForExternalEdit=true
-      emit('save',editor.value?.getHTML() || '',true)
+      emit('save',normalizeFigureCaptions(editor.value?.getHTML() || ''),true)
     })}),
     Image.configure({ inline: false, allowBase64: false }),
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
@@ -225,17 +225,61 @@ function normalizeFigureCaptions(html) {
       break
     }
   }
+  const isFigure = el => !!el && (el.tagName === 'IMG' || el.matches?.('div.mermaid-block'))
+  const captionText = el => {
+    if (!el || !/^(P|H[1-6])$/.test(el.tagName)) return null
+    const text = el.textContent.trim()
+    const match = text.match(/^图\s*[：:]\s*(\S[^\n]{0,150})$/)
+    if (match) return match[1].trim()
+    return el.dataset.figureCaption === 'true' ? text : null
+  }
   for (const figure of root.querySelectorAll('div.mermaid-block, img')) {
     const block = figure.parentElement?.tagName === 'P' ? figure.parentElement : figure
-    for (const candidate of [block.nextElementSibling, block.previousElementSibling]) {
-      if (!candidate || candidate.tagName !== 'P') continue
-      const match = candidate.textContent.trim().match(/^图\s*[：:]\s*(\S[^\n]{0,150})$/)
-      if (!match && candidate.dataset.figureCaption !== 'true') continue
-      if (match) candidate.textContent = match[1].trim()
-      candidate.dataset.figureCaption = 'true'
-      candidate.style.textAlign = 'center'
-      block.after(candidate)
-      break
+    // 空标题紧贴图块时没有意义，删掉，避免图上方多出一条空白标题。
+    for (const el of [block.previousElementSibling, block.nextElementSibling]) {
+      if (el && /^H[1-6]$/.test(el.tagName) && !el.textContent.trim() && !el.querySelector('img,div')) el.remove()
+    }
+    const prev = block.previousElementSibling, next = block.nextElementSibling
+    const prevCaption = captionText(prev), nextCaption = captionText(next)
+    // 紧跟在上一张图后的图名属于上一张；不能因为它在当前图前面就抢过来。
+    const prevBelongsToPrevious = !!prev && isFigure(prev.previousElementSibling)
+
+    function normalizeNext() {
+      if (!next || !nextCaption) return
+      let caption = next
+      if (caption.tagName !== 'P') {
+        const p = document.createElement('p')
+        p.textContent = nextCaption
+        caption.replaceWith(p)
+        caption = p
+      } else if (nextCaption !== caption.textContent.trim()) {
+        caption.textContent = nextCaption
+      }
+      caption.dataset.figureCaption = 'true'
+      caption.style.textAlign = 'center'
+      block.after(caption)
+    }
+
+    if (prevCaption && !prevBelongsToPrevious) {
+      if (nextCaption && next.textContent.trim() === prev.textContent.trim()) {
+        prev.remove()   // 图前后重名：保留已经在图后的那一条
+        normalizeNext()
+      } else {
+        // 当前图自带图前名称；下一段若也是图名，应归下一张图，不在这里吃掉。
+        let caption = prev
+        if (caption.tagName !== 'P') {
+          caption = document.createElement('p')
+          caption.textContent = prevCaption
+          prev.replaceWith(caption)
+        } else if (prevCaption !== caption.textContent.trim()) {
+          caption.textContent = prevCaption
+        }
+        caption.dataset.figureCaption = 'true'
+        caption.style.textAlign = 'center'
+        block.after(caption)
+      }
+    } else {
+      normalizeNext()
     }
   }
   return root.innerHTML
@@ -391,7 +435,7 @@ function scheduleAutosave() {
     const ed = editor.value
     // 仅当编辑器处于用户焦点（手动输入）才自动保存——程序 setContent（切章/流式）不触发
     if (!ed || !ed.isFocused || props.generating || props.externalLocked) return
-    const html = ed.getHTML() || ''
+    const html = normalizeFigureCaptions(ed.getHTML() || '')
     emit('save', html, true)  // auto=true：父端静默保存，不弹提示
   }, 2200)
 }
@@ -422,7 +466,7 @@ watch([() => props.generating, () => props.externalLocked, editor], () => {
 
 function save() {
   // 手动保存
-  const html = editor.value?.getHTML() || ''
+  const html = normalizeFigureCaptions(editor.value?.getHTML() || '')
   emit('save', html, false)
 }
 
@@ -473,7 +517,7 @@ onBeforeUnmount(() => {
 .tiptap-editor.gen-locked .toolbar .tb-save .el-button { pointer-events: none; opacity: .5; }
 .tiptap-editor.gen-locked .editor-content :deep(.tiptap-content) { cursor: progress; user-select: none; }
 .toolbar {
-  display: flex; align-items: center; gap: 2px; padding: 6px 10px;
+  display: flex; align-items: center; gap: 2px; padding: 4px 10px;
   border-bottom: 1px solid var(--line); flex-wrap: wrap; background: var(--card);
 }
 .tb-btn {
@@ -516,10 +560,12 @@ onBeforeUnmount(() => {
 /* 正文排版：类 Word 阅读体验 */
 .editor-content { flex: 1; overflow-y: auto; background: var(--paper); }
 .editor-content :deep(.tiptap-content) {
-  padding: 28px 40px 64px; outline: none; min-height: 100%;
+  padding: 16px 40px 64px; outline: none; min-height: 100%;
   max-width: 860px; margin: 0 auto; background: var(--card);
   font-size: 15px; color: var(--text);
 }
+/* 首段标题不再叠加 24px 上边距，正文从页面顶部留白后立即开始。 */
+.editor-content :deep(.tiptap-content > :first-child) { margin-top: 0; }
 .editor-content :deep(.tiptap-content h1) {
   font-size: 21px; font-weight: 700; margin: 24px 0 12px; padding-bottom: 8px;
   border-bottom: 2px solid var(--brand-soft); letter-spacing: 0.01em;

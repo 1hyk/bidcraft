@@ -63,6 +63,23 @@ _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
          ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp"}
 
 
+# Windows 上 Path.resolve() 每次要查最终路径（单次约 0.6 ms），检查页一次要给几百张图
+# 做边界校验，光 resolve 就占近半秒。url→路径的映射本身不变，缓存后只保留一次 is_file()
+# 检查：文件被删会立刻失效，内容变化由调用方重新读取，不受影响。
+_PATH_CACHE: dict[tuple[str, str], Path] = {}
+_PATH_LOCK = threading.Lock()
+_ROOT_CACHE: dict[str, Path] = {}
+
+
+def _upload_root() -> Path:
+    raw = str(settings.uploads_dir)
+    root = _ROOT_CACHE.get(raw)
+    if root is None:
+        root = Path(raw).resolve()
+        _ROOT_CACHE[raw] = root
+    return root
+
+
 def local_path_of(url: str) -> Path | None:
     """`/uploads/xxx` → 本地文件路径（`_image_index` 建 url 的逆运算）。
 
@@ -70,14 +87,26 @@ def local_path_of(url: str) -> Path | None:
     """
     if not url or not url.startswith("/uploads/"):
         return None
-    root = settings.uploads_dir.resolve()
+    root = _upload_root()
+    key = (str(root), url)
+    cached = _PATH_CACHE.get(key)
+    if cached is not None and cached.is_file():
+        return cached
     try:
         p = (root / url[len("/uploads/"):]).resolve()
     except (OSError, ValueError):
         return None
     if p != root and root not in p.parents:
         return None
-    return p if p.is_file() else None
+    if not p.is_file():
+        with _PATH_LOCK:
+            _PATH_CACHE.pop(key, None)
+        return None
+    with _PATH_LOCK:
+        if len(_PATH_CACHE) > 4096:      # 长期运行时不让缓存无限增长
+            _PATH_CACHE.clear()
+        _PATH_CACHE[key] = p
+    return p
 
 
 def read_image(url: str) -> tuple[bytes, str] | None:

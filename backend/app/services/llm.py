@@ -36,6 +36,20 @@ class LLMClient:
         self.api_key = api_key or settings.llm_api_key
         self.model = model or settings.text_model
         self.send_enable_thinking = send_enable_thinking
+        self.thinking_param = settings.llm_thinking_param.strip() or "enable_thinking"
+
+    def _thinking_payload(self, enabled: bool) -> dict:
+        """把“是否思考”翻译成端点认的参数。
+
+        百炼认 enable_thinking；部分中转站不认（实测仍会思考），需要
+        reasoning_effort=none 才能关。thinking_param=none 时不发任何参数。
+        """
+        if not self.send_enable_thinking or self.thinking_param == "none":
+            return {}
+        if self.thinking_param == "reasoning_effort":
+            # 开思考保持端点默认值，只有关的时候才需要显式传。
+            return {} if enabled else {"reasoning_effort": "none"}
+        return {"enable_thinking": enabled}
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
@@ -85,8 +99,7 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
         }
-        if self.send_enable_thinking:
-            payload["enable_thinking"] = enable_thinking
+        payload.update(self._thinking_payload(enable_thinking))
         if max_tokens:
             payload["max_tokens"] = max_tokens
         resp = self._post_with_retry(payload, timeout)
@@ -110,8 +123,7 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
         }
-        if self.send_enable_thinking:
-            payload["enable_thinking"] = enable_thinking
+        payload.update(self._thinking_payload(enable_thinking))
         if tools:
             payload["tools"] = tools  # 空数组部分端点会报错，无工具时不传
         resp = self._post_with_retry(payload, timeout)
@@ -140,8 +152,7 @@ class LLMClient:
             "stream": True,
             "max_tokens": 16384,  # 长表格/长正文需完整输出，防止中途截断
         }
-        if self.send_enable_thinking:
-            payload["enable_thinking"] = enable_thinking
+        payload.update(self._thinking_payload(enable_thinking))
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -201,8 +212,7 @@ class LLMClient:
             "messages": messages,
             "stream": True,
         }
-        if self.send_enable_thinking:
-            payload["enable_thinking"] = enable_thinking
+        payload.update(self._thinking_payload(enable_thinking))
         with _client(timeout=600.0) as c, c.stream(
             "POST",
             f"{self.base_url}/chat/completions",

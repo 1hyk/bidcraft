@@ -51,19 +51,6 @@ class Confirmation(BaseModel):
     notes: str = Field(default='', max_length=10000)
 
 
-class Arrangement(BaseModel):
-    node_ids: list[int] = Field(default_factory=list, max_length=100)
-
-
-@router.put('/projects/{project_id}/requirements/{req_id}/arrangement')
-def arrange(project_id: int, req_id: int, body: Arrangement):
-    try:
-        service.save_arrangement(project_id, req_id, body.node_ids)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return {'ok':True}
-
-
 @router.put('/projects/{project_id}/understanding')
 def confirm(project_id: int, body: Confirmation):
     try:

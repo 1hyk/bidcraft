@@ -4,20 +4,105 @@
 """
 import json
 import math
+import os
 import re
+import threading
+import time
+from pathlib import Path
 
 from app.core.database import query
 from app.services.image_ownership import image_name, NOT_SUGGESTIBLE_KINDS, resolve_image_skips
+
+# 像素摘要要解码整张图；检查页每次刷新会为上百张历史图重复计算，单次能到十几秒。
+# 同一个文件内容没变（路径、mtime、大小都相同）就直接复用结果；结果同时落盘，
+# 后端重启后也不用重算一遍。键里带 mtime/size，文件被替换时自动失效。
+_IDENTITY_CACHE: dict[tuple[str, int, int], str] = {}
+_IDENTITY_LOCK = threading.Lock()
+_IDENTITY_LOADED = False
+_IDENTITY_DIRTY = False
+_IDENTITY_SAVED_AT = 0.0
+_IDENTITY_CACHE_FILE = ".image_identity_cache.json"
+
+
+def _cache_path() -> Path:
+    from app.core.config import settings
+    return Path(settings.uploads_dir) / _IDENTITY_CACHE_FILE
+
+
+def _load_identity_cache() -> None:
+    global _IDENTITY_LOADED
+    with _IDENTITY_LOCK:
+        if _IDENTITY_LOADED:
+            return
+        _IDENTITY_LOADED = True
+    try:
+        raw = json.loads(_cache_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 缓存缺失/损坏只影响速度，不影响正确性
+        return
+    if not isinstance(raw, dict):
+        return
+    with _IDENTITY_LOCK:
+        for path, value in raw.items():
+            try:
+                mtime, size, identity = value
+                if isinstance(path, str) and identity.startswith("IMG-"):
+                    _IDENTITY_CACHE[(path, int(mtime), int(size))] = identity
+            except (TypeError, ValueError, AttributeError):
+                continue
+
+
+def _save_identity_cache(force: bool = False) -> None:
+    global _IDENTITY_DIRTY, _IDENTITY_SAVED_AT
+    now = time.monotonic()
+    if not force and now - _IDENTITY_SAVED_AT < 5:
+        return
+    with _IDENTITY_LOCK:
+        if not _IDENTITY_DIRTY:
+            return
+        payload = {path: [mtime, size, identity]
+                   for (path, mtime, size), identity in _IDENTITY_CACHE.items()}
+        _IDENTITY_DIRTY = False
+        _IDENTITY_SAVED_AT = now
+    try:
+        path = _cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+    except Exception:  # noqa: BLE001 写缓存失败不能让主流程失败
+        pass
 
 
 def image_identity(path) -> str:
     import hashlib
     from PIL import Image, ImageOps
 
+    global _IDENTITY_DIRTY
+
+    _load_identity_cache()
+    p = Path(path)
+    try:
+        stat = p.stat()
+        key = (str(p.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        with _IDENTITY_LOCK:
+            cached = _IDENTITY_CACHE.get(key)
+        if cached:
+            return cached
     with Image.open(path) as image:
         rgb = ImageOps.exif_transpose(image).convert("RGBA")
         digest = hashlib.sha256(str(rgb.size).encode() + rgb.tobytes()).hexdigest()
-    return "IMG-" + digest[:24]
+    value = "IMG-" + digest[:24]
+    if key is not None:
+        with _IDENTITY_LOCK:
+            _IDENTITY_CACHE[key] = value
+            _IDENTITY_DIRTY = True
+            if len(_IDENTITY_CACHE) > 8192:      # 防止长期运行的项目切换把内存撑大
+                _IDENTITY_CACHE.clear()
+        _save_identity_cache()
+    return value
 
 
 def catalog(project_id: int) -> list[dict]:
@@ -64,7 +149,9 @@ def catalog(project_id: int) -> list[dict]:
             })
     from app.services.generated_images import catalog as generated_catalog
 
-    return out + generated_catalog(project_id)
+    result = out + generated_catalog(project_id)
+    _save_identity_cache(force=True)
+    return result
 
 
 def _terms(text: str) -> set[str]:
@@ -75,7 +162,10 @@ def _terms(text: str) -> set[str]:
 def candidates(node: dict, assets: list[dict], limit: int = 6) -> list[dict]:
     outline = node.get("outline") or {}
     needs = outline.get("image_needs") or []
-    historical = [n for n in needs if isinstance(n, dict) and n.get("source") in {"history", "illustration"}]
+    # material 也要召回历史候选：这类需求常直接点名一张历史图（如「无人机实飞测试现场（一）」），
+    # 只把它当"待补真实材料"会让整章候选为空，连人工挑图都没有可选项。
+    # 是否可作为本项目实证由下游（写手与 image_completion）决定，检索层不替它做结论。
+    historical = [n for n in needs if isinstance(n, dict) and n.get("source") in {"history", "illustration", "material"}]
     planned_ids = {n.get('asset_id') for n in historical if n.get('asset_id')}
     if (needs and not historical) or (not needs and outline.get("need_image") is False):
         return []

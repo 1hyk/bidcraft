@@ -22,6 +22,9 @@ uploads/
 data/
 .idea/
 /bid_chat_db.sql
+# 迁移包产物：全量数据库导出与文件哈希清单，含真实业务数据
+/database.sql
+/manifest.json
 *.sql.gz
 *.sql.zip
 *.dump
@@ -49,6 +52,7 @@ backend/tools/_*.py
 *.log.err
 uvicorn*.log
 uvicorn*.log.err
+backend/uvicorn.out
 vite*.log
 vite*.log.err
 
@@ -66,3 +70,6 @@ vite*.log.err
 
 # 推广营销内容（仅本地，不公开）
 推广营销/
+
+# ============ 本地打包/迁移产物（含真实数据，禁止入库）============
+/deploy/

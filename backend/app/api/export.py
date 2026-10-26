@@ -9,6 +9,7 @@ filename= 作为老客户端的兜底。
 """
 from __future__ import annotations
 
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.services.docx_export import export_project_docx
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+logger = logging.getLogger(__name__)
 
 
 class IssueResolution(BaseModel):
@@ -99,6 +101,8 @@ def export_docx(project_id: int):
         # 项目不存在 / 没有目录树 —— 都是用户能自己解决的前置条件，回 400 带原文
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
+        # 包装成 HTTPException 前先留堆栈；否则前端只看到 500，服务端也没有可追的现场。
+        logger.exception("导出失败 project_id=%s", project_id)
         raise HTTPException(status_code=500, detail=f"导出失败：{e}") from e
 
     return FileResponse(

@@ -25,5 +25,24 @@ class DiagramEdit(unittest.TestCase):
         with patch.object(diagram_edit.llm,'chat',return_value='{"code":"flowchart LR\\n A <--> B"}'):
             self.assertIn('<-->',diagram_edit.revise('graph TD\n A-->B','双向连接'))
 
+    def test_caption_inside_candidate_is_removed(self):
+        import json
+        code='mindmap\n  root((指标体系))\n    安全合规\n图：指标体系思维导图'
+        with patch.object(diagram_edit.llm,'chat',return_value=json.dumps({'code':code})):
+            out=diagram_edit.revise('mindmap\n  root((指标体系))','补一个节点')
+        self.assertNotIn('图：',out)
+        self.assertTrue(out.startswith('mindmap'))
+
+    def test_candidate_markdown_fence_is_unwrapped(self):
+        with patch.object(diagram_edit.llm,'chat',return_value='{"code":"```mermaid\\nflowchart LR\\n A-->B\\n```"}'):
+            out=diagram_edit.revise('flowchart TD\n A-->B','改成横向')
+        self.assertEqual(out,'flowchart LR\n A-->B')
+
+    def test_candidate_mindmap_with_extra_root_is_rejected(self):
+        import json
+        code='mindmap\n  root((指标体系))\n    安全合规\n另一个根'
+        with patch.object(diagram_edit.llm,'chat',return_value=json.dumps({'code':code})):
+            with self.assertRaises(ValueError):diagram_edit.revise('mindmap\n  root((指标体系))','修改')
+
 
 if __name__=='__main__':unittest.main()

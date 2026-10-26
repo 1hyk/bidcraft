@@ -28,7 +28,9 @@ def snapshot(project_id):
     project=query_one('SELECT name FROM project WHERE id=%s',(project_id,)) or {}
     from app.services.export_dependencies import project_dependencies
     dependencies=project_dependencies(project_id,body)
-    fingerprint = hashlib.sha256(json.dumps({'layout_version':14,'style':style,'body':body,'project':project,'dependencies':dependencies},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    # 15：导出图注不再带「AI生成示意」。渲染口径变了，旧签名下的排版件必须失效重排，
+    # 否则预览/下载仍会拿到改动前生成的 document.docx。
+    fingerprint = hashlib.sha256(json.dumps({'layout_version':15,'style':style,'body':body,'project':project,'dependencies':dependencies},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {'signature':fingerprint,'style':style,'words':sum(content_words(x) for x in body),
             'complete':bool(body) and all(x['body'].strip() for x in body)}
 

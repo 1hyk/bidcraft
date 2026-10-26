@@ -20,7 +20,8 @@ langgraph-checkpoint-mysql>=3.0   # 编制会话 MySQL 检查点（PyMySQLSaver�
 # ============ 文档解析 ============
 # docx → python-docx 原生解析；PDF / 图片 → MinerU 云端 API（见 app/agents/parser_agent.py）
 python-docx>=1.1     # docx 结构直读（对象级切章 + full.md 渲染）
-pypdf>=5.0           # PDF 页数统计（MinerU 切块用）
+pypdf>=5.0           # PDF 页数统计（MinerU 切块用）；导出校验的回退实现
+pymupdf>=1.24,<2     # 导出校验快速抽取 PDF 文本/页脚；缺失时回退 pypdf
 pdfplumber>=0.11     # PDF 校验与表格提取（备用）
 # 图片处理：裁 Mermaid 导出图的白边 + 按纵横比定宽（app/services/mermaid_render.py）。
 # 它本来就是 pdfplumber 的传递依赖（pdfplumber → Pillow），这里显式列出来是因为

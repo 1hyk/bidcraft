@@ -3,11 +3,44 @@ import hashlib
 import re
 from docx import Document
 from docx.oxml.ns import qn
-from pypdf import PdfReader
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _page_texts(pdf_path):
+    """返回（全文, 页脚区文本, 总页数）。
+
+    pypdf 的纯 Python 文本抽取在 125 页标书上要 12 秒以上；PyMuPDF 约 0.5 秒。
+    PyMuPDF 不可用时回退 pypdf，结果口径保持一致。
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        pymupdf = None
+    if pymupdf is not None:
+        with pymupdf.open(pdf_path) as reader:
+            texts, footers = [], []
+            for page in reader:
+                rect = page.rect
+                texts.append(page.get_text() or '')
+                footers.append(page.get_text(clip=pymupdf.Rect(
+                    0, rect.height * .90, rect.width, rect.height)) or '')
+            return texts, footers, len(reader)
+    from pypdf import PdfReader
+    reader = PdfReader(pdf_path)
+    texts, footers = [], []
+    for page in reader.pages:
+        footer = []
+
+        def visit(text, cm, tm, font, size):
+            if 0 <= tm[5] < float(page.mediabox.height) * .10:
+                footer.append(text)
+
+        texts.append(page.extract_text(visitor_text=visit) or '')
+        footers.append(''.join(footer))
+    return texts, footers, len(reader.pages)
 
 
 def pagination_from_footers(footers, template):
@@ -62,14 +95,7 @@ def verify_references(expected, actual, headings, texts, printed):
 
 
 def validate_files(source, output_dir, footer_format):
-    reader=PdfReader(output_dir/'document.pdf')
-    texts=[];footers=[]
-    for page in reader.pages:
-        footer=[]
-        def visit(text,cm,tm,font,size):
-            if 0<=tm[5]<float(page.mediabox.height)*.10:footer.append(text)
-        texts.append(page.extract_text(visitor_text=visit) or '')
-        footers.append(''.join(footer))
+    texts,footers,total_pages=_page_texts(output_dir/'document.pdf')
     pagination,printed=pagination_from_footers(footers,footer_format)
     original=Document(source);rendered=Document(output_dir/'document.docx')
     # 导出自带的待补图附录另起一页，不计入目标正文篇幅。
@@ -88,7 +114,7 @@ def validate_files(source, output_dir, footer_format):
     result=verify_references(page_fields(original),page_fields(rendered),headings,texts,printed)
     result.update(docx_sha256=digest(output_dir/'document.docx'),pdf_sha256=digest(output_dir/'document.pdf'),
                   note='仅核对当前排版文件的章节页码引用，不代表技术措施或真实材料已验收')
-    return {**pagination,'total_pages':len(reader.pages),'pagination_basis':'final_pdf_footer','export_validation':result}
+    return {**pagination,'total_pages':total_pages,'pagination_basis':'final_pdf_footer','export_validation':result}
 
 
 def current_validation(project_id, signature):

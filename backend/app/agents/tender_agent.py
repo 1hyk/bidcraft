@@ -58,8 +58,9 @@ EXTRACT_SYSTEM = """你是招标文件分析专家。请**一次性**从这份�
 {LOTS_SECTION}
 === 三、招标要求（requirements）===
 {EXISTING_TOC}抽取四类，每类都要尽力找全（宁多勿漏，后续有筛选环节）：
-1. category="评分办法"：{G_FULL}相关的技术评分项（评分项名称、分值、评分标准要点；
-   表格形式的评分表逐行拆成条目）
+1. category="评分办法"：**只抽与{G_FULL}编制直接相关的技术评分项**（评分项名称、分值、
+   评分标准要点；表格形式的评分表逐行拆成条目）。业绩、资格、资质、商务、报价/价格、
+   财务、信用、联合体等**商务评审项一律不抽**，即使它们和技术评分项写在同一张评分表里
 2. category="技术要求"：技术标准、主要技术参数、验收标准等级、工期要求
 3. category="编制要求"：{G_SHORT}编制格式要求（暗标、页数、字体、装订、盖章、章节要求）
 4. category="废标风险"：否决投标/无效标/废标条款、实质性偏差条款
@@ -72,7 +73,8 @@ weight（分值，纯数字，无则 null）、source_location（章节名/条�
 - 没有那份清单、且本次目录 found=true 时：原样照抄本次目录里的章名或子节名；
 {FALLBACK_CHAPTERS}
 - 确实无从归章时给空字符串，不要硬凑。
-**不抽**：报价软件要求、平台操作、与{G_SHORT}编写无关的程序性条款。
+**不抽**：业绩/案例、资格/资质、商务/价格评分、财务/信用、联合体、报价软件要求、
+平台操作，以及与{G_SHORT}编写无关的程序性条款。
 
 只输出 JSON，不要任何解释文字与代码围栏（注意 toc **排在最前**，因为它是后两段的定位基准）：
 {"toc": {"found": true, "note": "", "chapters": [{"title": "", "children": [{"title": ""}]}]},
@@ -166,6 +168,7 @@ def _clean_requirements(items, toc: dict | None = None) -> list[dict]:
     """
     from app.agents.requirement_agent import TASKS, _dedup, _sanitize
     from app.core import chapter_title
+    from app.services.requirement_matrix import response_scope
 
     valid = {t["category"] for t in TASKS}   # 评分办法/技术要求/编制要求/废标风险
     candidates = chapter_title.toc_titles(toc) if (toc or {}).get("found") else []
@@ -178,6 +181,10 @@ def _clean_requirements(items, toc: dict | None = None) -> list[dict]:
             continue          # 类别不认识的一律丢弃（避免脏数据进覆盖检查清单）
         r = _sanitize(item, cat)
         if not r:
+            continue
+        # 模型仍可能把商务评审表里的业绩/价格项写成“评分办法”；这里按内容兜底剔除，
+        # 不让它们进入技术目录和逐章正文。
+        if cat == "评分办法" and response_scope(r) != "technical":
             continue
         if candidates:
             raw = str(r.get("suggested_chapter") or "")

@@ -49,11 +49,133 @@ class ContractTests(unittest.TestCase):
         result.clear()
         self.assertTrue(toc['chapters'][0]['children'])
 
+    def test_explicit_directory_keeps_whole_scope_scoring_item(self):
+        children = ['工程化交付方案','测试验收准备方案','项目实施方案','项目售后服务与保障能力']
+        toc={'chapters':[{'title':'技术方案',
+                          'children':[{'title':t} for t in children]}]}
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='技术方案',content='▲项每偏离一项扣4分。'),
+              *[dict(id=i,category='评分办法',title=t,suggested_chapter=t)
+                for i,t in enumerate(children,640)]]
+        result=contract.scope_chapters(toc,rows,'技术方案')
+        self.assertEqual([c['title'] for c in result],
+                         ['技术指标响应情况考察',*children])
+        # 规定子章顺序不变，整册评分项只补一次；覆盖校验必须能通过。
+        contract.validate_scope_coverage(
+            {'chapters':[{'title':'技术方案','children':result}]},rows,toc,'技术方案')
+
+    def test_whole_scope_scoring_item_with_blank_mapping_survives_explicit_directory(self):
+        children = ['工程化交付方案','测试验收准备方案']
+        toc={'chapters':[{'title':'技术方案','children':[{'title':t} for t in children]}]}
+        rows=[dict(id=654,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='',
+                   content='对采购文件附件1条款响应情况进行考察，▲项每偏离一项扣4分。'),
+              *[dict(id=i,category='评分办法',title=t,suggested_chapter=t)
+                for i,t in enumerate(children,655)]]
+        result=contract.scope_chapters(toc,rows,'技术方案')
+        self.assertEqual([c['title'] for c in result],
+                         ['技术指标响应情况考察',*children])
+        contract.validate_scope_coverage(
+            {'chapters':[{'title':'技术方案','children':result}]},rows,toc,'技术方案')
+
+    def test_unrelated_blank_scoring_item_is_not_forced_into_directory(self):
+        toc={'chapters':[{'title':'技术方案','children':[{'title':'工程化交付方案'}]}]}
+        rows=[dict(id=1,category='评分办法',title='方案完整性',suggested_chapter='',
+                   content='技术方案完整、可行。'),
+              dict(id=2,category='评分办法',title='工程化交付方案',
+                   suggested_chapter='工程化交付方案')]
+        result=contract.scope_chapters(toc,rows,'技术方案')
+        self.assertEqual([c['title'] for c in result],['工程化交付方案'])
+
+    def test_response_children_accept_answer_wording_and_avoid_duplicate_suffix(self):
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='',
+                   content='对附件1条款逐条应答。'),
+              dict(id=625,category='技术要求',title='售后响应',
+                   suggested_chapter='技术方案',source_location='技术要求',
+                   content='附件1 2.5：售后响应时限。')]
+        children=contract.required_response_children('技术指标响应情况考察',rows,'技术方案')
+        self.assertEqual([c['title'] for c in children],['售后响应'])
+
+    def test_whole_scope_scoring_item_uses_own_title_without_toc(self):
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='技术方案',content='▲项每偏离一项扣4分。')]
+        self.assertEqual([c['title'] for c in contract.scope_chapters(None,rows,'技术方案')],
+                         ['技术指标响应情况考察'])
+
+    def test_response_scoring_item_expands_to_scope_technical_clauses(self):
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='技术方案',
+                   content='对附件1条款响应情况进行考察，▲项每偏离一项扣4分。'),
+              dict(id=625,category='技术要求',title='局点实飞演示场景支撑',
+                   suggested_chapter='技术方案',source_location='附件1 2.1.1 功能要求',
+                   content='1.实际飞行飞机接入演示平台。'),
+              dict(id=626,category='技术要求',title='监视能力全量验证',
+                   suggested_chapter='技术方案',source_location='附件一 2.1.1 功能要求',
+                   content='1.监视功能全量验证。'),
+              dict(id=632,category='技术要求',title='工期要求',
+                   suggested_chapter='项目实施方案',source_location='采购公告-2.5',
+                   content='30日历天交货。')]
+        children=contract.required_response_children('技术指标响应情况考察',rows,'技术方案')
+        self.assertEqual([c['title'] for c in children],
+                         ['局点实飞演示场景支撑响应','监视能力全量验证响应'])
+        # 普通方案章节不能被误判成条款响应章。
+        self.assertEqual(contract.required_response_children('项目实施方案',rows,'技术方案'),[])
+
+    def test_response_children_exclude_commercial_clauses(self):
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='技术方案',
+                   content='对附件1条款响应情况进行考察，▲项每偏离一项扣4分。'),
+              dict(id=625,category='技术要求',title='监视能力全量验证',
+                   suggested_chapter='技术方案',source_location='附件1 2.1.1 功能要求',
+                   content='1.监视功能全量验证。'),
+              dict(id=630,category='技术要求',title='最高限价',
+                   suggested_chapter='技术方案',source_location='采购公告-2.7',
+                   content='最高限价120万元。'),
+              dict(id=631,category='技术要求',title='付款方式',
+                   suggested_chapter='技术方案',source_location='采购公告-2.8',
+                   content='验收后付款。')]
+        children=contract.required_response_children('技术指标响应情况考察',rows,'技术方案')
+        self.assertEqual([c['title'] for c in children],['监视能力全量验证响应'])
+
+    def test_response_children_skip_clauses_covered_by_other_chapters(self):
+        rows=[dict(id=639,category='评分办法',title='技术指标响应情况考察',
+                   suggested_chapter='技术方案',
+                   content='对附件1条款响应情况进行考察，▲项每偏离一项扣4分。'),
+              dict(id=640,category='评分办法',title='工程化交付方案',
+                   suggested_chapter='工程化交付方案'),
+              dict(id=643,category='评分办法',title='项目售后服务与保障能力',
+                   suggested_chapter='售后服务与保障方案'),
+              dict(id=625,category='技术要求',title='局点实飞演示场景支撑',
+                   suggested_chapter='功能及性能要求',
+                   source_location='附件1 2.1.1 功能要求',content='实飞演示。'),
+              dict(id=634,category='技术要求',title='交付物清单',
+                   suggested_chapter='工程化交付方案',
+                   source_location='附件1 2.2 验收交付物',content='交付清单。'),
+              dict(id=673,category='技术要求',title='售后服务响应机制',
+                   suggested_chapter='售后服务与保障方案',
+                   source_location='附件1 2.5 售后服务',content='响应机制。'),
+              dict(id=635,category='技术要求',title='工期要求',
+                   suggested_chapter='',
+                   source_location='采购公告-2.5',content='30日历天。')]
+        children=contract.required_response_children('技术指标响应情况考察',rows,'技术方案')
+        # 未映射到规定章节的功能条款要展开；已由“工程化交付方案”承载的交付物不重复；
+        # 采购公告里的工期条款不属于附件1响应范围。
+        self.assertEqual([c['title'] for c in children],['局点实飞演示场景支撑响应'])
+
+    def test_scope_named_scoring_item_is_not_nested_chapter(self):
+        toc={'chapters':[{'title':'技术方案','children':[{'title':'工程化交付方案'}]}]}
+        rows=[dict(id=1,category='评分办法',title='技术方案',
+                   suggested_chapter='技术方案',content='技术方案完整可行。')]
+        result=contract.scope_chapters(toc,rows,'技术方案')
+        self.assertEqual([c['title'] for c in result],['工程化交付方案'])
+
     def test_source_and_full_constraint_inherited_by_child(self):
         text=contract.requirements_text(self.rows(),['进度安排','技术方案','项目实施方案'])
-        for word in ['初验','联调','试运行','终验','培训','招标.docx','评分表','要求#4']:
+        for word in ['初验','联调','试运行','终验','培训','招标.docx','评分表','项目实施方案']:
             self.assertIn(word,text)
-        self.assertNotIn('要求#2',text)
+        # 内部要求编号只用于系统关联，不能交给模型抄进正文。
+        self.assertNotIn('要求#',text)
 
     def test_graph_passes_constraints_to_outline(self):
         state=dict(project_id=1,facts=[],toc={'chapters':[{'title':'技术方案','children':[

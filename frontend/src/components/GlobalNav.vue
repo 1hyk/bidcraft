@@ -40,7 +40,6 @@ const NAV = [
     label: '项目工作台',
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
   },
-  {path:'/company',label:'公司资料',icon:'▤'},
   {
     path: '/knowledge',
     label: '历史参考素材',

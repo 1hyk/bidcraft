@@ -159,10 +159,8 @@ def _image_plan(project_id: int) -> dict:
 
 
 def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
-    from app.services.document_checks import resolve_requirement_refs, internal_references
-    if internal_references(body):
-        from app.services.compilation_requirements import load_requirements
-        body = resolve_requirement_refs(body, load_requirements(project_id))
+    from app.services.document_checks import clean_requirement_refs
+    body = clean_requirement_refs(body, project_id)
     if not body or not body.strip():
         raise ValueError('模型未返回正文，原有内容已保留，请重试')
     from app.services.image_planning import normalize_outline

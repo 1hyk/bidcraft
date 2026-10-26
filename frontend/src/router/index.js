@@ -3,7 +3,11 @@ import { createRouter, createWebHistory } from 'vue-router'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    {path:'/company',name:'company',component:()=>import('../views/CompanyProfileView.vue')},
+    {
+      // 公司资料当前不对外使用；保留旧地址跳回首页，避免收藏链接落到空白页。
+      path: '/company',
+      redirect: '/',
+    },
     {
       path: '/',
       name: 'home',

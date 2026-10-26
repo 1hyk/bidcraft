@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     text_model: str = "qwen3.8-flash"
     vision_model: str = "qwen3.8-flash"
+    # 关闭思考模式用哪个请求参数：百炼是 enable_thinking；部分 OpenAI 兼容中转站
+    # 不认这个字段，需改发 reasoning_effort=none。可选 enable_thinking / reasoning_effort / none。
+    llm_thinking_param: str = "enable_thinking"
     # 提炼知识页时用视觉模型看图起名/写内容描述（`services/image_vision.py`）。
     # 实测 qwen3.8-flash 能读图（自绘对照图能抄出图上的随机串）。关掉只是省钱/断网兜底，
     # 关掉后图名只能来自文档原文与文本推断，`images[].content` 会退回"照着图名编"。

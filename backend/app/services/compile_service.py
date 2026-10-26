@@ -474,8 +474,8 @@ def regenerate_node_outline(task_id: int, project_id: int, node_id: int) -> dict
             chapter_title=title, chapter_type="",
             project_facts=confirmed_facts(project_id), knowledge_pages=pages,
             experiences=match_experiences(title, path, dom),
-            reqs_text=requirements_text(load_requirements(project_id), [title, *path])
-                      or requirements_for_chapter_text(project_id, title),
+            reqs_text=(requirements_text(load_requirements(project_id), [title, *path])
+                       or requirements_for_chapter_text(project_id, title)),
             lot_brief=lot_text, domain=dom, project_id=project_id,
         )
         outline["_toc_title"] = title

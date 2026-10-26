@@ -49,9 +49,19 @@ OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，�
    每项补充 content_origin：proposal_design（我方拟议安排）或 external_evidence（外部真实材料）；
    data_structure 按实际内容填写：records（记录）、assignment（岗位/班次分配）、comparison（对照）、
    measurements（数据）、timeline（任务时间跨度）、process（流程）、hierarchy（层级）、
-   relationships（关系）、spatial_scene（空间场景）。不能只根据图名猜类型。
+   relationships（关系）、physical_scene（真实物体/场地的外观与摆位）、
+   spatial_layout（分区、航线、覆盖、高度层、位置等空间信息）。不能只根据图名猜类型。
    分配、记录、对照和数据内容用可编辑表格；任务跨度用甘特图；关系用 Mermaid。
-   场景插图默认按具有实物质感的拟议场景表达，visual_style=photorealistic；仅明确需要非写实空间说明时用spatial_illustration。写实质感不代表实拍证据。
+   空间类内容先判断信息载体：把示意线、色块、箭头和标注全部去掉后，这张图要说明的信息还在不在？
+   - 还在：信息只靠真实物体和场地的外观承载 → physical_scene，visual_style=photorealistic。
+   - 不在：信息只靠边界、分区、航线、覆盖范围等现实中不可见的图示符号承载 → spatial_layout，
+     visual_style=spatial_illustration（俯视平面示意）。
+   - 两者都有（既要表现现场实物，又要表达航线、覆盖范围、分区或点位）→ **必须拆成两条
+     image_needs**：一条 physical_scene 现场实景图，一条 spatial_layout 空间信息图。不要合并成
+     一张，也不要在写实图上叠加符号。本章内容确实只需要其中一方面的，才只规划一条。
+   判断依据是信息载体，不是图名里有没有“示意/图”等字；不要根据行业词表套画风。
+   写实质感不代表实拍证据。写实场景只用真实物体及其位置表达关系，不叠加虚线、箭头、引线、
+   圈注、覆盖扇区或发光连线；这些内容应另列一条空间信息图表达。
    场景插图的 prompt 明确主体、数量或相对规模、位置关系、视角、关键细节，不放整段正文，
    不虚构具体型号或实测状态；图名在正文单独排版，不画进图片。
    没有需求就给空数组；need_image 与 image_needs 是否为空保持一致。
@@ -65,7 +75,7 @@ OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，�
   "refs": [{"chapter_type": "可参考的知识页类型", "usage": "引用说明"}],
   "need_table": true,
   "need_image": false,
-  "image_needs": [{"name": "图名", "purpose": "用途", "content_origin": "proposal_design|external_evidence", "data_structure": "records|assignment|comparison|measurements|timeline|process|hierarchy|relationships|spatial_scene", "source": "mermaid|history|illustration|material", "asset_id": "history选中候选时填写原始asset_id，其他留空", "allow_generated": false, "visual_style": "photorealistic|spatial_illustration", "prompt": "仅合成示意图填写画面要求"}]
+  "image_needs": [{"name": "图名", "purpose": "用途", "content_origin": "proposal_design|external_evidence", "data_structure": "records|assignment|comparison|measurements|timeline|process|hierarchy|relationships|physical_scene|spatial_layout", "source": "mermaid|history|illustration|material", "asset_id": "history选中候选时填写原始asset_id，其他留空", "allow_generated": false, "visual_style": "photorealistic|spatial_illustration", "prompt": "仅合成示意图填写画面要求"}]
 }"""
 
 
@@ -323,10 +333,11 @@ def generate_outline(
         + f"本项目事实（可引用，无则标注待补充）：{facts}\n"
         f"相关的历史知识页标题（仅供提示本类章节存在，其内容不作为编写参考）：{pages}\n"
     )
-    assets = []
+    assets, preference = [], ''
     if project_id is not None:
-        from app.services.image_planning import outline_assets
+        from app.services.image_planning import outline_assets, outline_preference
         assets = outline_assets(project_id, chapter_title, reqs_text)
+        preference = outline_preference(project_id)
     if assets:
         user += '\n【可复用图片候选（已按领域、归属过滤，含视觉描述）】\n' + json.dumps([
             {k: a.get(k) for k in ('asset_id','caption','kind','content','source_title')}
@@ -334,6 +345,8 @@ def generate_outline(
         user += ('\n先判断这些图片是否确实适合本章，适合才以 source=history、原始 caption 为 name、'
                  '原始 asset_id 编入 image_needs；不得将其他项目图片当作本项目实证，也不要为复用而硬选。'
                  '只有候选均不满足，才规划新的概念插图；表格与矩阵使用 need_table，不要文生图。')
+    if preference:
+        user += '\n' + preference
     raw = llm.chat(
         [
             {"role": "system", "content": fill_genre(OUTLINE_SYSTEM, domain)},

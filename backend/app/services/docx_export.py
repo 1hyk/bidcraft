@@ -461,10 +461,13 @@ def _normalize_body(payload: dict | None) -> str:
     fmt = (payload.get("format") or "html").lower()
     # 与前端 markdownToHtml 的自动识别保持一致：标了 md 但内容已是 HTML 的（历史数据）按 HTML 处理
     if fmt == "md" and not body.startswith("<"):
-        html = _md.markdown(_break_before_lists(body), extensions=_MD_EXTS)
+        html = _md.markdown(
+            _blank_around_tables(_break_before_lists(body)), extensions=_MD_EXTS)
     else:
         html = body
-    return migrate_tdz_html(html)
+    from app.services.mermaid_source import normalize_html_body
+
+    return migrate_tdz_html(normalize_html_body(html))
 
 
 # 顶层列表标记（0-3 空格缩进 + *、-、+ 或 1./1) ）；缩进 4+ 的是上一项的嵌套列表，不是"新开列表"
@@ -472,6 +475,75 @@ _LIST_START = re.compile(r"^ {0,3}(?:[*+-]|\d{1,9}[.)])(?:\s|$)")
 # 任意缩进的列表标记：用来判断"上一行是否已经在列表里"（缩进 4 格的嵌套项也算）
 _ANY_LIST_LINE = re.compile(r"^\s*(?:[*+-]|\d{1,9}[.)])(?:\s|$)")
 _FENCE = re.compile(r"^ {0,3}(?:```|~~~)")
+
+
+def _is_table_separator(line: str) -> bool:
+    text = line.strip().replace('｜', '|')
+    if '|' not in text:
+        return False
+    cells = [cell.strip() for cell in text.strip('|').split('|')]
+    return bool(cells) and all(re.fullmatch(r':?-{3,}:?', cell) for cell in cells)
+
+
+def _table_cells(line: str) -> list[str]:
+    text = line.strip().replace('｜', '|').strip('|')
+    return [cell.strip() for cell in text.split('|')]
+
+
+def _table_like(line: str) -> bool:
+    """至少两根竖线才当表格行：一行普通文字里偶尔出现一个 | 不应被改写成表。
+
+    全角竖线只在候选表格行里转换，避免改动正文里的普通符号。
+    """
+    return line.strip().replace('｜', '|').count('|') >= 2
+
+
+def _blank_around_tables(md: str) -> str:
+    """规范 Markdown 表格并补空行，避免表题紧贴表头或模型漏写分隔行时整表变段落。
+
+    - 表题和表头之间没有空行：补空行（原有行为）；
+    - 模型只写表头和数据行、漏了 `| --- |`：按表头列数补分隔行；
+    - 模型用全角竖线 `｜`：只在表格块内转成半角，正文不受影响；
+    - 围栏代码块内一律不处理。
+    """
+    lines = md.split('\n')
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            i += 1
+            continue
+        if not in_fence and _table_like(line):
+            run: list[str] = []
+            j = i
+            while j < len(lines) and lines[j].strip() and _table_like(lines[j]):
+                run.append(lines[j].replace('｜', '|'))
+                j += 1
+            if len(run) >= 2:
+                header, second = run[0], run[1]
+                columns = len(_table_cells(header))
+                if _is_table_separator(second):
+                    block = run
+                elif columns >= 2 and len(_table_cells(second)) == columns:
+                    # 模型漏写分隔行：按表头列数补齐，后面的数据行原样保留。
+                    block = [header, '| ' + ' | '.join(['---'] * columns) + ' |', *run[1:]]
+                else:
+                    block = None
+                if block:
+                    if out and out[-1].strip():
+                        out.append('')
+                    out.extend(block)
+                    if j < len(lines) and lines[j].strip():
+                        out.append('')
+                    i = j
+                    continue
+        out.append(line)
+        i += 1
+    return '\n'.join(out)
 
 
 def _break_before_lists(md: str) -> str:
@@ -730,7 +802,9 @@ def _walk_block(doc, style: DocxStyle, parent, base_level: int,
             match = re.fullmatch(r'图\s*[：:]\s*(\S[^\n]{0,150})', candidate.text_content().strip())
             if not match and candidate.get('data-figure-caption') != 'true':
                 continue
-            caption_text = match.group(1).strip() if match else candidate.text_content().strip()
+            from app.services.image_caption import print_caption
+            caption_text = print_caption(match.group(1).strip() if match
+                                         else candidate.text_content().strip())
             candidate.clear()
             candidate.text = caption_text
             candidate.set('data-figure-caption', 'true')
@@ -795,10 +869,11 @@ def _walk_block(doc, style: DocxStyle, parent, base_level: int,
                 p.paragraph_format.keep_with_next = True
                 _font(p.add_run(el.text_content()), style.table_size_pt, style.body_font)
             elif el.get('data-figure-caption') == 'true':
+                from app.services.image_caption import print_caption
                 p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
                 p.paragraph_format.first_line_indent = Cm(0)
                 p.paragraph_format.line_spacing = 1.0
-                _font(p.add_run(el.text_content()), style.table_size_pt, style.body_font, color=GRAY)
+                _font(p.add_run(print_caption(el.text_content())), style.table_size_pt, style.body_font, color=GRAY)
             else:
                 _add_inline(_para(doc, style, indent=True), style, el, images=images)
 
@@ -899,9 +974,9 @@ def _lookup_name(raw: str, images) -> tuple[str, object | None]:
 
     if not isinstance(images, ProjectImages):
         images = ProjectImages(images)
-    from app.services.image_caption import display_caption
+    from app.services.image_caption import print_caption
     name,path=images.take(raw)
-    return display_caption(name),path
+    return print_caption(name),path
 
 
 def _image_source_note(raw,images):
@@ -909,7 +984,8 @@ def _image_source_note(raw,images):
     bound=re.search(r'素材ID=(IMG-[0-9a-f]{24})',raw)
     asset=getattr(images,'assets',{}).get(bound.group(1)) if bound else None
     if not asset or not asset.get('generated'):return ''
-    return 'AI生成示意' + ('；数据仅作示例，非实测结果' if '数据仅作示例，非实测结果' in str(asset.get('caption')) else '')
+    # 导出件是给客户看的正式稿，不标注「AI生成示意」；数据示例的免责说明仍然保留。
+    return '数据仅作示例，非实测结果' if '数据仅作示例，非实测结果' in str(asset.get('caption')) else ''
 
 
 def _lookup_raw(raw: str) -> str:
@@ -954,7 +1030,9 @@ def _add_text(paragraph, style: DocxStyle, text: str, bold: bool, italic: bool, 
         if m.start() > pos:
             _run(paragraph, text[pos:m.start()], bold, italic, red, collapse=collapse)
         name, path = _lookup_name(m.group(1), images)
-        visible_name = re.split(r"\|\s*素材ID", m.group(1), maxsplit=1)[0].strip()
+        from app.services.image_caption import print_caption
+        visible_name = print_caption(
+            re.split(r"\|\s*素材ID", m.group(1), maxsplit=1)[0].strip())
         if path is None:
             _run(paragraph, f"[图片占位：{visible_name}]", bold, italic, red=True, collapse=collapse)
             _font(paragraph.add_run(f"（{_pending_kind(_lookup_raw(m.group(1)))}）"),
@@ -1188,7 +1266,8 @@ def _collect_pending(tree: list[dict], contents: dict[int, dict],
                 for m in _PLACEHOLDER_RE.finditer(_strip_code(body)):
                     raw = m.group(1)
                     if _lookup_name(raw, look)[1] is None:
-                        nm = _lookup_raw(raw) or raw.strip()
+                        from app.services.image_caption import print_caption
+                        nm = print_caption(_lookup_raw(raw) or raw.strip())
                         out.append({"chapter": (node.get("title") or "").strip(),
                                     "name": nm, "kind": _pending_kind(nm)})
             walk(node.get("children") or [])

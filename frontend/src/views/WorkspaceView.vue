@@ -10,7 +10,6 @@
         <template #dropdown><el-dropdown-menu>
           <el-dropdown-item command="files">项目文件</el-dropdown-item>
           <el-dropdown-item command="facts">项目关键参数</el-dropdown-item>
-          <el-dropdown-item command="company">公司资料库</el-dropdown-item>
           <el-dropdown-item command="planning" divided>编写与排版设置</el-dropdown-item>
           <el-dropdown-item command="style">排版设置</el-dropdown-item>
           <el-dropdown-item command="pages">目标页数与测量</el-dropdown-item>
@@ -33,7 +32,7 @@
         <template v-if="stage === 'writing'"><span class="context-progress">{{ progress }} / {{ total }} 章</span><el-button size="small" type="danger" plain @click="stopBatch">停止生成</el-button></template>
         <template v-else-if="currentWorkflowStep === 2">
           <el-button :disabled="!canStart" :loading="stage === 'generating_toc'" @click="startCompile">{{ tocChapters.length ? '重新生成目录' : '生成目录' }}</el-button>
-          <el-button :disabled="!tocChapters.length" @click="openPlanningSettings('requirements')">要求与章节对应</el-button>
+          <el-button v-if="tocChapters.length" @click="openPlanningSettings('requirements')">要求与章节对应</el-button>
           <el-button @click="openPlanningSettings('settings')">编写与排版设置</el-button>
           <el-button v-if="tocChapters.length" type="primary" :disabled="!canWriteAll" @click="writeAllChapters">设置并生成正文</el-button>
         </template>
@@ -218,7 +217,7 @@
               <button v-if="unwrittenCount" class="toc-batch-btn ghost" :disabled="outlinesGen" :title="'为 ' + unwrittenCount + ' 个尚无思路的章节生成编写思路'" @click="genOutlines">
                 {{ outlinesGen ? '思路生成中…' : '生成思路' }}<i v-if="unwrittenCount" class="toc-unw-num num">{{ unwrittenCount }}</i>
               </button>
-              <button v-if="currentWorkflowStep === 2" class="toc-batch-btn" title="批量调整章节与层级" @click="openTocBatch">批量整理</button>
+              <button v-if="TOC_BATCH_ENTRY_ENABLED && currentWorkflowStep === 2" class="toc-batch-btn" title="批量调整章节与层级" @click="openTocBatch">批量整理</button>
             </div>
           </div>
           <div v-if="tocChapters.length" class="toc-legend">
@@ -270,8 +269,8 @@
 
         <div v-if="!directoryLoaded" class="workspace-loading"><p>正在读取项目进度…</p><el-button @click="loadTree">重试读取</el-button></div>
         <ProjectUnderstandingPanel v-if="directoryLoaded" v-show="currentWorkflowStep === 1" :model-value="currentWorkflowStep === 1" :project-id="projectId" @confirmed="navigateWorkflow('planning')" @files="filesCollapsed = false" @source="openFileSections" />
-        <el-drawer v-model="showProposalCheck" title="检查与导出" size="min(820px, 90vw)" :modal="false" :lock-scroll="false" :close-on-click-modal="false" :destroy-on-close="false" class="proposal-check-drawer">
-        <ProposalCheckPanel v-if="directoryLoaded" :model-value="showProposalCheck" :project-id="projectId" :node-id="activeNodeId" :writing="stage === 'writing' || activeIsGenerating" :can-export="canExport" :exporting="exporting" @export="exportDocx" @back="showProposalCheck = false" @locate="switchToNode" @changed="companyFillChanged" @company="showCompanyLibrary = true" @pages="showPages = true" @source="openFileSections" />
+        <el-drawer v-model="showProposalCheck" title="检查与导出" size="min(1000px, 94vw)" :modal="false" :lock-scroll="false" :close-on-click-modal="false" :destroy-on-close="false" class="proposal-check-drawer">
+        <ProposalCheckPanel v-if="directoryLoaded" :model-value="showProposalCheck" :project-id="projectId" :node-id="activeNodeId" :writing="stage === 'writing' || activeIsGenerating" :can-export="canExport" :exporting="exporting" @export="exportDocx" @back="showProposalCheck = false" @locate="switchToNode" @pages="showPages = true" @source="openFileSections" />
         </el-drawer>
         <el-drawer v-model="showDirectoryPlanning" :title="planningPanelMode === 'settings' ? '编写与排版设置' : '要求与章节对应'" size="min(820px, 90vw)" :modal="false" :lock-scroll="false" :close-on-click-modal="false" :destroy-on-close="false">
           <DirectoryPlanningPanel v-if="directoryLoaded" :key="planningPanelMode" :mode="planningPanelMode" :project-id="projectId" :refresh-key="planningRefreshKey" @style="showStyle = true" @pages="showPages = true" @locate="locatePlannedChapter" />
@@ -294,7 +293,7 @@
 
           <section v-if="currentWorkflowStep === 2" class="directory-guide">
             <h3 v-if="!activeNodeId">先整理章节，再核对编写思路</h3>
-            <p v-if="!activeNodeId">左侧选择章节查看思路；章节旁可增删改名，批量整理可调整完整目录。</p>
+            <p v-if="!activeNodeId">左侧选择章节查看思路；章节旁可增删改名。</p>
             <p v-else>在此核对本章编写安排；修改思路不会自动改写已有正文。</p>
             <el-button v-if="activeNodeId && hasCurrentBody && !contentLoading && !contentError" @click="navigateWorkflow('writing')">查看本章正文</el-button>
             <el-button v-if="!activeNodeId && tocChapters.length" @click="onTocNodeClick(displayTree.body[0] || tocChapters[0])">查看首章思路</el-button>
@@ -492,9 +491,6 @@
     <!-- 篇幅控制抽屉（目标正文页数 → 各章目标字数） -->
     <PagesDrawer v-model="showPages" :project-id="projectId" :style-revision="styleRevision" />
 
-    <el-drawer v-model="showCompanyLibrary" title="本公司资料" size="85%" destroy-on-close>
-      <CompanyProfileView />
-    </el-drawer>
     <!-- 章节索引查看抽屉（文件旁 ☰ 按钮） -->
     <FileSectionsDrawer v-model="showFileSections" :project-id="projectId" :file-id="sectionFile?.id" :file-name="sectionFile?.file_name || ''" />
 
@@ -784,9 +780,7 @@ async function locatePlannedChapter(id) {
   showDirectoryPlanning.value=false
   tocTreeRef.value?.setCurrentKey(Number(id))
 }
-import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
-const CompanyProfileView = defineAsyncComponent(() => import('./CompanyProfileView.vue'))
-const showCompanyLibrary = ref(false)
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter,onBeforeRouteLeave,onBeforeRouteUpdate } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listFiles, uploadFile, deleteProjectFile, reparseProjectFile, chatStream, getChatHistory, clearChatHistory, compileStart, compileStatus, writeAll, taskStatus, listFacts, selectLot, extractLots, getLotsStatus, getLotProfile, saveLotProfile, rebuildLotProfile, getLotProfileRebuildStatus, getUsedDetail, tocPreview, tocApply, generateTreeOutlines, listKnowledgePages, getKnowledgePage, listRequirements,
@@ -804,9 +798,6 @@ import {splitDocumentTree} from '../documentTree'
 import {workflowStep,openUnderstandingOnEntry,saveBeforeWorkflow} from '../workflowStep'
 const bodyEditor = ref(null)
 let pendingBodySave = Promise.resolve()
-async function companyFillChanged(id){
-  if(Number(activeNodeId.value)===Number(id))await loadContent(activeNodeId.value)
-}
 import FileSectionsDrawer from '../components/FileSectionsDrawer.vue'
 import StyleDrawer from '../components/StyleDrawer.vue'
 import PagesDrawer from '../components/PagesDrawer.vue'
@@ -835,7 +826,6 @@ function openWorkspaceResource(command) {
   if (command === 'planning') openPlanningSettings()
   if (command === 'files') filesCollapsed.value = false
   if (command === 'facts') showFacts.value = true
-  if (command === 'company') showCompanyLibrary.value = true
   if (command === 'style') showStyle.value = true
   if (command === 'pages') showPages.value = true
 }
@@ -921,6 +911,9 @@ async function loadSelectedLot() {
 }
 
 // 目录批量编辑（粘贴文字生成/替换目录）
+// 演示期间先隐藏入口：粘贴整份目录替换现有目录，误触可能连带删除已写正文。
+// 功能代码与后端接口保留，恢复时把开关改回 true 即可。
+const TOC_BATCH_ENTRY_ENABLED = false
 const tocBatchOpen = ref(false)
 const tocText = ref('')
 const tocPlan = ref(null)
@@ -2977,7 +2970,7 @@ onUnmounted(() => {
 .os-toggle-row { display: flex; align-items: center; gap: 8px; padding: 0 16px; }
 .os-toggle {
   display: flex; align-items: center; gap: 7px; flex: 1; text-align: left;
-  border: none; background: none; padding: 8px 0; cursor: pointer;
+  border: none; background: none; padding: 6px 0; cursor: pointer;
   font-size: 14px; font-weight: 700; color: var(--brand);
 }
 .os-toggle:hover { opacity: .85; }
@@ -3017,7 +3010,7 @@ onUnmounted(() => {
 .os-page.empty { color: var(--text-3); }
 
 .ai-mark {
-  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 16px;
   background: var(--amber-soft); border-bottom: 1px solid #f0d9ac; font-size: 13px;
 }
 .ai-mark.streaming { background: var(--brand-soft); border-bottom-color: #c4d6f5; }
@@ -3291,7 +3284,7 @@ button.workflow-step:hover { background:#f4f7fc; color:#315bd6; }
 .toc-header { padding:16px 14px; flex-wrap:wrap; gap:10px; }
 .toc-header > span { color:#26364e; font-size:13px; }
 .toc-head-right { flex-wrap:wrap; }
-.content-header { min-height:58px; border-bottom:1px solid #e8edf4; padding:12px 24px; background:#fff; }
+.content-header { min-height:50px; border-bottom:1px solid #e8edf4; padding:8px 24px; background:#fff; }
 .content-title { color:#24334b; font-size:15px; }
 .content-hint { display:none; }
 .sidebar { width:250px; background:#f8faff; border-right:1px solid #e3eaf4; }

@@ -3,11 +3,8 @@
     <header class="check-heading"><div><span>定稿准备</span><h2>检查、补全与导出</h2><p>核对技术响应和真实材料，修改后复查，最后导出排版文件。</p></div><el-button @click="emit('back')">收起检查</el-button></header>
     <p class="note">先查问题，再按来源补全或修改正文，处理后复查。条款核验需手动启动；补全不会自动把要求标为通过。</p>
     <div class="actions">
-      <el-button :disabled="busy || reviewing || writing" @click="openFill()">从公司资料补全</el-button>
-      <el-button @click="emit('company')">管理公司资料</el-button>
       <el-button @click="emit('pages')">测量与调整页数</el-button>
     </div>
-    <p class="note" v-if="company">公司库：{{ usableFacts }} 条已确认有效资料 · {{ pendingFacts }} 条待审核。资料按需选用，此数量不代表本项目要求已满足。</p>
     <el-tabs v-model="tab">
       <el-tab-pane label="技术要求响应" name="requirements">
         <div class="actions">
@@ -105,10 +102,10 @@
         <p v-if="report">检查 {{ report.chapters }} 节，当前待处理 {{ report.issues?.length || 0 }} 条：{{ issueSummary }}。此统计包含图片核对等事项，不仅统计待补占位。</p>
         <div class="filters"><el-select v-model="issueKind" clearable placeholder="全部问题类型"><el-option v-for="(label,key) in issueGroups" :key="key" :label="label" :value="key" /></el-select></div>
         <el-table :data="filteredIssues" empty-text="当前筛选未发现规则问题，仍须人工审核">
-          <el-table-column prop="chapter" label="章节" width="170" />
-          <el-table-column prop="message" label="问题" min-width="200" />
-          <el-table-column label="对应内容" min-width="220"><template #default="{row}"><strong>{{ row.excerpt }}</strong><p v-if="row.context" class="note">{{ row.context }}</p></template></el-table-column>
-          <el-table-column label="处理方式" min-width="220"><template #default="{row}">
+          <el-table-column prop="chapter" label="章节" width="150" />
+          <el-table-column prop="message" label="问题" min-width="180" />
+          <el-table-column label="对应内容" min-width="200"><template #default="{row}"><strong>{{ row.excerpt }}</strong><p v-if="row.context" class="note">{{ row.context }}</p></template></el-table-column>
+          <el-table-column label="处理方式" min-width="200"><template #default="{row}">
             <p class="note">{{ issueAdvice(row) }}</p>
             <p v-if="row.workflow_note" class="note">{{ row.workflow_note }}</p>
             <p v-if="row.resolution" class="note">{{ actionLabel(row.resolution.action) }}：{{ row.resolution.note }} · {{ new Date(row.resolution.checked_at).toLocaleString() }}</p>
@@ -119,7 +116,7 @@
             <el-button v-else link :disabled="busy || writing" @click="handleIssue(row,'reopen')">重新打开</el-button>
             <el-button v-if="row.kind === 'pagination'" link type="primary" @click="emit('pages')">查看页数</el-button>
           </template></el-table-column>
-          <el-table-column label="定位" width="110"><template #default="{row}"><el-button v-if="row.node_id" link type="primary" @click="go(row.node_id,row.excerpt,row.asset_id)">定位正文</el-button></template></el-table-column>
+          <el-table-column label="定位" width="100" fixed="right"><template #default="{row}"><el-button v-if="row.node_id" link type="primary" @click="go(row.node_id,row.excerpt,row.asset_id)">定位正文</el-button></template></el-table-column>
         </el-table>
         <details v-if="report?.resolution_history?.length">
           <summary>查看人工处理记录（{{ report.resolution_history.length }} 条，含历史版本）</summary>
@@ -138,20 +135,18 @@
         </details>
       </el-tab-pane>
     </el-tabs>
-    <footer class="check-footer"><span>核验结果辅助人工审查；导出文件仍须核对页码、图表和承诺。</span><el-button type="primary" :disabled="!canExport || writing || busy || reviewing || showFill" :loading="exporting" @click="emit('export')">导出 Word</el-button></footer>
-  <CompanyFillDrawer v-model="showFill" :project-id="projectId" :node-id="fillNode" @changed="filled" />
+    <footer class="check-footer"><span>核验结果辅助人工审查；导出文件仍须核对页码、图表和承诺。</span><el-button type="primary" :disabled="!canExport || writing || busy || reviewing" :loading="exporting" @click="emit('export')">导出 Word</el-button></footer>
   </section>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { checkProposal, resolveProposalIssue, reviewProposal, proposalRequirements, getCompanyProfile, fileSections, fileSectionContent, locateRequirementSource } from '../api'
-import CompanyFillDrawer from './CompanyFillDrawer.vue'
+import { checkProposal, resolveProposalIssue, reviewProposal, proposalRequirements, fileSections, fileSectionContent, locateRequirementSource } from '../api'
 import { reviewMarkup } from '../reviewMarkup'
 const props = defineProps({ modelValue: Boolean, projectId: [String, Number], nodeId: [String, Number], writing: Boolean, canExport:Boolean, exporting:Boolean })
-const emit = defineEmits(['update:modelValue', 'locate', 'changed', 'company', 'pages', 'source', 'back', 'export'])
-const showFill=ref(false), fillNode=ref(null), company=ref(null), issueKind=ref('')
+const emit = defineEmits(['update:modelValue', 'locate', 'pages', 'source', 'back', 'export'])
+const issueKind=ref('')
 const linkedIssues=ref(null)
 const showHandled=ref(false)
 const currentHandled=row=>(report.value?.handled_issues || []).find(i=>i.issue_id===row.issue_id && i.fingerprint===row.fingerprint && i.resolution?.checked_at===row.checked_at)
@@ -173,8 +168,6 @@ async function handleIssue(row,action){
   } catch(e){if(e!=='cancel' && e!=='close')error(e)}
   finally{if(project===props.projectId)busy.value=false}
 }
-const usableFacts=computed(()=>(company.value?.entries || []).filter(f=>f.confirmed && !f.expired && !f.conflict && (!f.doc_id || f.source_status==='extracted')).length)
-const pendingFacts=computed(()=>(company.value?.entries || []).filter(f=>f.status==='pending').length)
 const sources = ref({})
 const sourceState = item => sources.value[item.requirement_id] || {}
 async function loadSource(item) {
@@ -223,19 +216,16 @@ function relatedIssues(item){
 }
 function showRelated(item){linkedIssues.value=relatedIssues(item);issueKind.value='';tab.value='issues'}
 const filteredIssues=computed(()=>(showHandled.value ? report.value?.handled_issues ?? [] : linkedIssues.value ?? report.value?.issues ?? []).filter(r=>!issueKind.value || groupOf(r.kind)===issueKind.value))
-function canUseCompany(row){return row.kind==='missing_evidence' && /资质|证书|姓名|业绩|公司|本单位|设备型号|真实材料/.test(row.excerpt || '')}
 function issueAdvice(row){
   const kind=row.kind
-  if(canUseCompany(row))return '包含可能需要真实材料的内容，可查公司库；如还包含本次安排，请分开核对，不自动当作公司事实。'
-  if(kind==='missing_evidence' && /人数|岗位|投入|排班|指派|天数|周期/.test(row.excerpt || ''))return '主要涉及本次拟实施安排：打开章节完善合理配置，并对照招标要求；不一定需要上传公司文件。'
+  if(kind==='missing_evidence' && /资质|证书|姓名|业绩|公司|本单位|设备型号|真实材料/.test(row.excerpt || ''))return '包含可能需要真实材料的内容，请打开章节核对；如还包含本次安排，请分开处理，不自动当作已具备的事实。'
+  if(kind==='missing_evidence' && /人数|岗位|投入|排班|指派|天数|周期/.test(row.excerpt || ''))return '主要涉及本次拟实施安排：打开章节完善合理配置，并对照招标要求。'
   if(kind==='missing_evidence' && /阈值|指标|百分比|Hz|ms|毫秒|具体数值/.test(row.excerpt || ''))return '先查本项目招标原文与关键参数；若为方案设计值，应明确拟采用条件，不能冒充实测结果。'
-  if(kind==='missing_evidence')return '需人工区分真实材料、本次安排或不必要占位；打开章节处理，不默认要求补公司资料。'
+  if(kind==='missing_evidence')return '需人工区分真实材料、本次安排或不必要占位；打开章节处理。'
   if(kind==='pagination')return '先测量当前版本的实际页数，再决定是否调整。'
   if(groupOf(kind)==='images')return '核对图名、来源和内容；真实证明需补原件，方案关系图可用 Mermaid。'
-  return '打开章节核对依据或修改方案，处理后刷新；不能靠补充公司资料解决所有问题。'
+  return '打开章节核对依据或修改方案，处理后刷新。'
 }
-function openFill(id){ if(props.writing)return; fillNode.value=id || props.nodeId || null; showFill.value=true }
-async function filled(id){emit('changed',id);await load();ElMessage.info('正文已更新，问题清单已刷新；条款核验需重新运行')}
 const busy = ref(false), reviewing = ref(false), report = ref(null), assessment = ref(null)
 const tab = ref('requirements'), status = ref(''), category = ref(''), search = ref('')
 const labels = { covered: '正文义务覆盖，待复核', partial: '部分响应', missing: '未找到证据', pending_stage:'待最终环节核对', unverified: '尚未取得核验结论', not_applicable: '需在其他文件核查' }
@@ -266,14 +256,12 @@ async function load() {
   busy.value = true
   linkedIssues.value=null
   try {
-    const results = await Promise.allSettled([proposalRequirements(project), checkProposal(project), getCompanyProfile()])
+    const results = await Promise.allSettled([proposalRequirements(project), checkProposal(project)])
     if (version !== requestVersion || project !== props.projectId) return
     if (results[0].status === 'fulfilled') assessment.value = results[0].value.data
     else { assessment.value = null; error(results[0].reason) }
     if (results[1].status === 'fulfilled') report.value = results[1].value.data
     else { report.value = null; error(results[1].reason) }
-    if(results[2].status==='fulfilled')company.value=results[2].value.data
-    else {company.value=null;error(results[2].reason)}
   } finally { if (version === requestVersion) busy.value = false }
 }
 async function review() {
@@ -289,7 +277,7 @@ async function review() {
   }
 }
 watch(() => [props.modelValue, props.projectId], ([open, project], previous) => {
-  if (previous && project !== previous[1]) { sources.value={};showFill.value=false; company.value=null; assessment.value = null; report.value = null; status.value = ''; category.value = ''; search.value = '';issueKind.value='' }
+  if (previous && project !== previous[1]) { sources.value={}; assessment.value = null; report.value = null; status.value = ''; category.value = ''; search.value = '';issueKind.value='' }
   if (open) load()
 }, { immediate: true })
 </script>

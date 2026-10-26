@@ -209,8 +209,9 @@ def main() -> int:
     p_low = _system_prompt([], "技术指标响应情况/工程化交付方案")
     check("传了兜底词表（按域取）就写进去", "工程化交付方案" in p_low, True)
     from app.agents.requirement_agent import suggested_chapters    # noqa: E402
-    check("lowalt 的兜底词表来自 Domain.chapters",
-          suggested_chapters("lowalt"), "技术指标响应情况/工程化交付方案/测试验收准备方案/项目实施方案/项目售后服务与保障能力")
+    # 2026-10-20 起目录必须有当前招标依据，lowalt 的默认章骨架已清空。
+    check("lowalt 不再自带默认章骨架（由招标依据决定目录）",
+          suggested_chapters("lowalt"), "")
     check("未声明章骨架的域返回空串（不回退别域）", suggested_chapters("softtest"), "")
 
     # ---- 3c. 冒烟：不打 LLM 跑完整的 extract_tender_all ----

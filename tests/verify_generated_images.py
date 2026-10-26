@@ -149,7 +149,12 @@ class GeneratedImagesTests(unittest.TestCase):
             with patch('app.services.llm.llm.chat',return_value=json.dumps(result)):
                 with self.assertRaises(images.ImageGenerationError):
                     _REAL_VISUAL_VALIDATOR(path,self.need)
-        with patch('app.services.llm.llm.chat',return_value='{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true}'):
+        for result in [{'relevant':True,'has_text':False,'style_matches':True,'physical_plausible':True,'has_schematic_overlay':True},
+                       {'relevant':True,'has_text':False,'style_matches':True,'physical_plausible':True}]:
+            with patch('app.services.llm.llm.chat',return_value=json.dumps(result)):
+                with self.assertRaises(images.ImageGenerationError):
+                    _REAL_VISUAL_VALIDATOR(path,self.need)
+        with patch('app.services.llm.llm.chat',return_value='{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"has_schematic_overlay":false}'):
             _REAL_VISUAL_VALIDATOR(path,self.need)
 
     def test_http_failure_is_not_retried(self):
@@ -200,7 +205,9 @@ class GeneratedImagesTests(unittest.TestCase):
         _render_html(doc, DocxStyle(), "<p>" + body + "</p>",
                      images=ProjectImages(assets={a["asset_id"]: a for a in refs}))
         self.assertEqual(len(doc.inline_shapes), 1)
-        self.assertIn("AI生成示意", "".join(p.text for p in doc.paragraphs))
+        captions = "".join(p.text for p in doc.paragraphs)
+        self.assertIn("试验区概念效果图", captions)
+        self.assertNotIn("AI生成示意", captions)
 
     def test_failures_preserve_text_without_empty_placeholder(self):
         with patch.object(completion, "generate", side_effect=images.ImageGenerationError("额度不足")):
@@ -225,6 +232,25 @@ class GeneratedImagesTests(unittest.TestCase):
         self.assertTrue(selected_ids(body))
         self.assertTrue(self.ctx['image_review_warnings'])
         self.assertEqual(self.ctx['image_generation_errors'],[])
+
+    def test_unavailable_explicit_history_does_not_generate_replacement(self):
+        asset_id = "IMG-" + "9" * 24
+        self.ctx["outline"]["image_needs"] = [{**self.need, "asset_id": asset_id}]
+        with patch.object(completion, "generate") as generate:
+            body = completion.complete(self.ctx, "[图片占位：试验区概念效果图]", 4, 1)
+        generate.assert_not_called()
+        self.assertNotIn("图片占位", body)
+        self.assertIn("历史素材当前不可用", self.ctx["image_generation_errors"][0]["reason"])
+        self.assertEqual(self.ctx["image_review_warnings"], [])
+
+    def test_history_verification_failure_does_not_generate_replacement(self):
+        self.ctx["image_refs"] = [{"asset_id": "IMG-" + "1" * 24, "caption": self.need["name"], "content": "空间安排"}]
+        with patch("app.services.llm.llm.chat", side_effect=RuntimeError("模型超时")), \
+             patch.object(completion, "generate") as generate:
+            body = completion.complete(self.ctx, "[图片占位：试验区概念效果图]", 4, 1)
+        generate.assert_not_called()
+        self.assertNotIn("图片占位", body)
+        self.assertIn("历史图片核验失败", self.ctx["image_generation_errors"][0]["reason"])
 
     def test_quantity_cap_is_enforced(self):
         self.ctx["outline"]["image_needs"] = [{**self.need, "name": f"概念效果图{i}"} for i in range(3)]

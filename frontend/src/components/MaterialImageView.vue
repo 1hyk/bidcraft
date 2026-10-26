@@ -21,13 +21,12 @@
     <el-dialog v-model="replaceOpen" append-to-body width="760px" title="替换本张图片" :close-on-click-modal="!busy" :show-close="!busy" :close-on-press-escape="!busy">
       <p>只替换这张图片，原图保留供回退。生成结果需点击“采用此图”才写入正文。</p>
       <el-tabs v-model="tab">
-        <el-tab-pane label="AI修改 / 重新设计" name="generate">
-          <p><el-radio-group v-model="generationMode" :disabled="busy"><el-radio value="edit">修改当前图</el-radio><el-radio value="redesign">重新设计一张</el-radio></el-radio-group></p>
-          <img :src="asset.url" alt="本次编辑的原图" style="max-width:100%;max-height:240px;object-fit:contain" />
-          <el-input v-model="feedback" type="textarea" :rows="3" :placeholder="generationMode==='edit' ? '描述原图需要修改的位置，例如：去掉黑色虚线，其他内容和构图保持不变。' : '描述新图应保留的主题、希望改变的构图和不要出现的内容。'" />
+        <el-tab-pane label="AI重新设计" name="generate">
+          <img :src="asset.url" alt="本次重新设计的参考原图" style="max-width:100%;max-height:240px;object-fit:contain" />
+          <el-input v-model="feedback" type="textarea" :rows="3" placeholder="描述新图应保留的主题、希望改变的构图和不要出现的内容。" />
           <p><el-radio-group v-model="quality"><el-radio value="high">高清（保持原图比例）</el-radio><el-radio value="standard">标准（保持原图比例）</el-radio></el-radio-group></p>
-          <p>{{ generationMode === 'edit' ? '原图和修改意见一起交给图像模型，未提及的内容尽量保留，但可能改变细节。' : '先看当前图、结合你的意见整理新绘图要求，再设计新图；不保证保留原构图。' }} 会调用已配置的模型并计费。候选需确认后替换，原图保留；流程关系图请使用Mermaid单图修改。</p>
-          <el-button :loading="busy" :disabled="busy || !feedback.trim()" @click="regenerate">{{ generationMode === 'edit' ? '生成修改候选' : '生成重新设计候选' }}</el-button>
+          <p>先看当前图、结合你的意见整理新绘图要求，再设计新图；不保证保留原构图。会调用已配置的模型并计费。候选需确认后替换，原图保留；流程关系图请使用Mermaid单图修改。</p>
+          <el-button :loading="busy" :disabled="busy || !feedback.trim()" @click="regenerate">生成重新设计候选</el-button>
         </el-tab-pane>
         <el-tab-pane label="素材库" name="library">
           <el-input v-model="search" placeholder="搜索图名" />
@@ -48,8 +47,6 @@ import {loadImageAssets} from '../materialImages'
 import {displayImageCaption,figureTitle} from '../imageCaption'
 import {regenerateImage,uploadImageAsset} from '../api'
 const props=defineProps(nodeViewProps)
-const generationMode=ref('edit')
-watch(generationMode,()=>{candidate.value=null})
 const assets=ref([]),loading=ref(false),failed=ref(false),zoom=ref(false),replaceOpen=ref(false),busy=ref(false),candidate=ref(null),feedback=ref(''),quality=ref('high'),tab=ref('generate'),search=ref('')
 const options=()=>props.extension.options
 const asset=computed(()=>assets.value.find(a=>a.asset_id===props.node.attrs.assetId))
@@ -78,7 +75,10 @@ function openReplace(){candidate.value=null;replaceOpen.value=true}
 function adopt(){if(!props.editor.isEditable || !candidate.value)return;select(candidate.value,[...history.value,{asset_id:props.node.attrs.assetId,caption:props.node.attrs.caption,customCaption:props.node.attrs.customCaption}].slice(-20));replaceOpen.value=false}
 function rollback(){if(!props.editor.isEditable)return;const h=[...history.value],a=h.pop();if(a)select(a,h)}
 async function remove(){if(!props.editor.isEditable)return;try{await ElMessageBox.confirm('从正文移除这张图？原文件仍保留，可用编辑器撤销恢复。','删除配图');props.deleteNode();changed()}catch{}}
-async function regenerate(){if(busy.value)return;busy.value=true;try{const {data}=await regenerateImage(options().projectId,{asset_id:props.node.attrs.assetId,node_id:options().nodeId,feedback:feedback.value,quality:quality.value,mode:generationMode.value,request_id:crypto.randomUUID()});candidate.value=data;await load(true)}catch(e){error(e)}finally{busy.value=false}}
+// crypto.randomUUID 只在安全上下文（HTTPS 或 localhost）可用；用 IP + HTTP 部署时它是 undefined，
+// 直接调用会在发请求前抛错，表现为「按钮点了没反应」。这里降级到时间戳+随机串。
+function newRequestId(){try{if(globalThis.crypto?.randomUUID)return crypto.randomUUID()}catch{}return 'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,10)}
+async function regenerate(){if(busy.value)return;busy.value=true;try{const {data}=await regenerateImage(options().projectId,{asset_id:props.node.attrs.assetId,node_id:options().nodeId,feedback:feedback.value,quality:quality.value,mode:'redesign',request_id:newRequestId()});candidate.value=data;await load(true)}catch(e){error(e)}finally{busy.value=false}}
 async function upload(e){const f=e.target.files?.[0];if(!f)return;busy.value=true;try{const {data}=await uploadImageAsset(options().projectId,f,props.node.attrs.caption);candidate.value=data;await load(true)}catch(err){error(err)}finally{busy.value=false;e.target.value=''}}
 </script>
 <style scoped>

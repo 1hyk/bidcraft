@@ -178,6 +178,10 @@ def persist_one(project_id: int, node_id: int, body_md: str, used: dict | None =
     used：本次生成取材摘要（经验/知识页/项目文件片段/工法/事实条数），随正文一起落库，
     供页面展示"这一章用了哪些经验与素材"；不传则不写该键（如用户手工编辑保存后即无）。
     """
+    from app.services.mermaid_source import normalize_body
+    from app.services.document_checks import clean_requirement_refs
+
+    body_md = clean_requirement_refs(normalize_body(body_md), project_id)
     if used and used.get("images"):
         from app.services.image_retrieval import bind_references, selected_ids
 
@@ -228,6 +232,9 @@ def persist_chapters(project_id: int, chapters: list[dict]) -> int:
     """
     import re
 
+    from app.services.mermaid_source import normalize_body
+    from app.services.document_checks import clean_requirement_refs
+
     saved = 0
     for ch in chapters:
         title = (ch.get("title") or "").strip()
@@ -253,7 +260,9 @@ def persist_chapters(project_id: int, chapters: list[dict]) -> int:
                 prev_body, prev_format = old.get("body", ""), old.get("format", "md")
             except (TypeError, ValueError):
                 pass
-        content = {"format": "md", "body": ch.get("content", ""),
+        content = {"format": "md",
+                   "body": clean_requirement_refs(
+                       normalize_body(ch.get("content", "")), project_id),
                    "prev_content": prev_body, "prev_format": prev_format}
         if ex:
             execute(

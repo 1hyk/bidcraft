@@ -79,16 +79,67 @@ def ensure_editor_index(project_id):
         raise
 
 
-def index_required(requirements):
-    """只认当前文件的明确编制指令；评分表、附件名称本身不构成指令。"""
+def _text_requires_index(text):
+    """只认明确要求编制/填写索引的句子；评分表、附件名称本身不构成指令。"""
+    for sentence in re.split(r'[。；;\n]', str(text or '')):
+        if re.search(r'无需|无须|不需|不用|不要求|可不|自行决定|自愿', sentence):
+            continue
+        if re.search(
+                r'(?:须|应当|应|必须|要求|请)[^。；;\n]{0,50}'
+                r'(?:编制|提供|附|填写|建立|设置|列明)'
+                r'[^。；;\n]{0,25}(?:索引目录|评分索引|响应索引|索引表|索引(?!号))',
+                sentence):
+            return True
+    return False
+
+
+_tender_text_cache = {}
+
+
+def _tender_text(project_id):
+    """抽取漏项时回读招标原文；只读 tender 文件，按路径+mtime 缓存。"""
+    from app.core.config import settings
+    from app.core.database import query
+    files = query(
+        "SELECT file_path FROM project_file WHERE project_id = %s AND category = 'tender'",
+        (project_id,))
+    paths = [settings.uploads_dir / f['file_path'] for f in files
+             if str(f.get('file_path') or '').lower().endswith(('.docx', '.pdf'))]
+    key = (project_id, tuple((str(p), p.stat().st_mtime) for p in paths if p.exists()))
+    if key in _tender_text_cache:
+        return _tender_text_cache[key]
+    from docx import Document
+    chunks = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            if path.suffix.lower() == '.pdf':
+                import pdfplumber
+                with pdfplumber.open(str(path)) as pdf:
+                    chunks.extend(page.extract_text() or '' for page in pdf.pages)
+            else:
+                doc = Document(str(path))
+                chunks.extend(p.text for p in doc.paragraphs)
+                for table in doc.tables:
+                    for row in table.rows:
+                        chunks.append(' | '.join(c.text for c in row.cells))
+        except Exception:  # noqa: BLE001 原文读取失败不影响已抽取的要求
+            continue
+    text = '\n'.join(chunks)
+    _tender_text_cache[key] = text
+    return text
+
+
+def index_required(requirements, project_id=None):
+    """只认当前文件的明确编制指令；抽取漏了索引要求时回读招标原文。"""
     for row in requirements:
         if row.get('status') == 'ignored' or row.get('category') != '编制要求':
             continue
-        for sentence in re.split(r'[。；;\n]', str(row.get('content') or '')):
-            if re.search(r'无需|无须|不需|不用|不要求|可不|自行决定|自愿', sentence):
-                continue
-            if re.search(r'(?:须|应当|应|必须|要求|请)[^。；;\n]{0,50}(?:编制|提供|附|填写|建立)[^。；;\n]{0,25}(?:索引目录|评分索引|响应索引|索引表)', sentence):
-                return True
+        if _text_requires_index(row.get('content')):
+            return True
+    if project_id is not None:
+        return _text_requires_index(_tender_text(project_id))
     return False
 
 
@@ -130,10 +181,12 @@ def build_entries(requirements, tree):
 
 
 def project_index(project_id, tree=None):
-    from app.services.requirement_service import list_requirements
+    from app.services.requirement_service import list_requirements, is_technical_requirement
     from app.services.section_service import get_tree
     requirements = list_requirements(project_id)
-    if not index_required(requirements):
+    if not index_required(requirements, project_id):
         return []
-    return build_entries([r for r in requirements if r.get('category') == '评分办法'],
+    # 技术评分索引只列技术评分项；业绩/价格/资格等商务评审项不得进表。
+    return build_entries([r for r in requirements
+                          if r.get('category') == '评分办法' and is_technical_requirement(r)],
                          get_tree(project_id) if tree is None else tree)

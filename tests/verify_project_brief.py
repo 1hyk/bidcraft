@@ -25,7 +25,9 @@ class BriefTests(unittest.TestCase):
         self.assertEqual(requirement_group(general),'bid_notices')
         self.assertEqual(chapter_candidates(general,nodes),[])
         review={'category':'废标风险','title':'关键指标偏离过多','content':'▲项偏离两项及以上的，技术指标响应情况考察项得0分。'}
-        self.assertEqual(chapter_candidates(review,nodes),[nodes[0]])
+        candidates=chapter_candidates(review,nodes)
+        self.assertEqual([n['id'] for n in candidates],[nodes[0]['id']])
+        self.assertTrue(candidates[0].get('basis'))
         review['content']='关键技术指标不满足，影响评审。'
         self.assertEqual(chapter_candidates(review,nodes),[],'无明确依据时不能猜测关联成功')
 

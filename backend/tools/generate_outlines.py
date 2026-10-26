@@ -4,6 +4,7 @@
 用途：目录已在库、思路未生成（中断/未跑）时补跑，避免重新生成目录。
 用法：python tools/generate_outlines.py <project_id>
 """
+import print
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 

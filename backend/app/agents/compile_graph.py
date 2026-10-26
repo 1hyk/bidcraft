@@ -123,7 +123,14 @@ def node_generate_toc(state: CompileState) -> dict:
         if (required_chapters and normalize(ch["title"]) == normalize(settings.generation_root_title)):
             ch["children"] = deepcopy(required_chapters)
             return ch
-        from app.services.compilation_requirements import required_stage_children
+        from app.services.compilation_requirements import (
+            required_response_children, required_stage_children,
+        )
+        responses = required_response_children(
+            ch['title'], contract, settings.generation_root_title)
+        if responses:
+            ch['children'] = responses
+            return ch
         stages = required_stage_children(ch['title'], contract)
         if stages:
             ch['children'] = stages

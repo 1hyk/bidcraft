@@ -291,6 +291,39 @@ def save_docx_style(project_id: int, body: dict = Body(...)):
     return {"ok": True, "style": style.to_dict()}
 
 
+# ---------------------------------------------------------------- 配图偏好（规划阶段倾向）
+
+@router.get("/{project_id}/image-policy")
+def get_image_policy(project_id: int):
+    """项目级配图偏好。未设置的项目返回默认值，不返回 404。"""
+    from app.services.image_planning import normalize_policy
+
+    row = query_one("SELECT image_policy FROM project WHERE id = %s", (project_id,))
+    if not row:
+        raise HTTPException(404, "项目不存在")
+    return {"policy": normalize_policy(row.get("image_policy"))}
+
+
+@router.put("/{project_id}/image-policy")
+def save_image_policy(project_id: int, body: dict = Body(...)):
+    """保存配图偏好（`image_policy` JSON 列）。
+
+    只接收已知键，未知键丢弃：偏好是规划提示词的一部分，字段名写错不该悄悄生效。
+    偏好只影响**之后重新生成编写思路**的结果，已确认的思路不会自动改写。
+    """
+    from app.services.image_planning import normalize_policy
+
+    if not query_one("SELECT id FROM project WHERE id = %s", (project_id,)):
+        raise HTTPException(404, "项目不存在")
+    payload = body.get("policy") if isinstance(body.get("policy"), dict) else body
+    policy = normalize_policy(payload)
+    execute(
+        "UPDATE project SET image_policy = %s, updated_at = %s WHERE id = %s",
+        (json.dumps(policy, ensure_ascii=False), datetime.now(), project_id),
+    )
+    return {"ok": True, "policy": policy}
+
+
 # ---------------------------------------------------------------- 篇幅控制（目标正文页数）
 
 @router.get("/{project_id}/page-plan")

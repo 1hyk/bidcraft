@@ -25,6 +25,7 @@
       <p><el-button :loading="revising" :disabled="!revisionFeedback.trim() || revising" @click="requestRevision">生成单图候选</el-button><small>调用当前配置的文本模型，可能消耗额度。</small></p>
       <el-alert v-if="revisionError" :title="revisionError" type="error" :closable="false" />
       <div v-if="candidateSvg" class="mm-candidate"><h4>修改候选预览</h4><div v-html="candidateSvg" /><details><summary>查看候选源码</summary><pre>{{ candidateCode }}</pre></details></div>
+      <div v-else-if="candidateCode" class="mm-candidate"><h4>候选源码（未能渲染）</h4><pre>{{ candidateCode }}</pre></div>
       <template #footer><el-button :disabled="revising" @click="revisionOpen=false">关闭，保留原图</el-button><el-button type="primary" :disabled="!candidateSvg || revising || !editor.isEditable" @click="adoptRevision">采用修改</el-button></template>
     </el-dialog>
   </node-view-wrapper>
@@ -46,6 +47,12 @@ const showSource = ref(false)
 const editingCode = ref('')
 const revisionOpen=ref(false),revisionFeedback=ref(''),revising=ref(false),revisionError=ref(''),candidateCode=ref(''),candidateSvg=ref('')
 let revisionSource='',revisionSeq=0
+// 图名属于正文，不参与单图候选；模型偶尔仍会写进源码，先剥掉再渲染。
+function cleanCandidate(code){
+  return String(code || '').split(/\r?\n/).filter(line =>
+    !/^\s*(?:\*\*|__)?\s*图\s*(?:\d+(?:[-–—.]\d+)*)?\s*[:：]/.test(line)
+  ).join('\n').trim()
+}
 function openRevision(){revisionOpen.value=true;revisionError.value='';candidateCode.value='';candidateSvg.value='';revisionSource=props.node.attrs.code || ''}
 async function requestRevision(){
   if(revising.value || !props.editor.isEditable)return
@@ -57,13 +64,23 @@ async function requestRevision(){
     if(!opts.projectId || !opts.nodeId)throw Error('当前图未关联项目章节，无法生成候选')
     const {data}=await reviseMermaid(opts.projectId,{node_id:opts.nodeId,code:revisionSource,feedback:revisionFeedback.value})
     if(seq!==revisionSeq)return
+    const cleaned=cleanCandidate(data.code)
+    if(!cleaned)throw Error('候选源码为空')
+    candidateCode.value=cleaned
     const {default:mermaid}=await import('mermaid')
     mermaid.initialize({startOnLoad:false,theme:'default',securityLevel:'strict',suppressErrorRendering:true,themeVariables})
-    const pieces=splitMindmap(data.code),out=[]
+    const pieces=splitMindmap(cleaned),out=[]
     for(let i=0;i<pieces.length;i++)out.push((await mermaid.render(`mm-revision-${Date.now()}-${seq}-${i}`,pieces[i])).svg)
     if(seq!==revisionSeq)return
-    candidateCode.value=data.code;candidateSvg.value=out.join('')
-  }catch(e){if(seq===revisionSeq)revisionError.value=e?.response?.data?.detail || '候选生成或语法渲染失败，原图未修改；请调整要求后重试。'}
+    candidateSvg.value=out.join('')
+  }catch(e){
+    if(seq!==revisionSeq)return
+    const detail=e?.response?.data?.detail
+    const renderError=String(e?.message || e).slice(0,120)
+    revisionError.value=detail || (candidateCode.value
+      ? `候选源码渲染失败（${renderError}）；原图未修改。可查看下方源码或调整要求后重试。`
+      : `候选生成失败（${renderError}），原图未修改；请稍后重试。`)
+  }
   finally{if(seq===revisionSeq)revising.value=false}
 }
 function adoptRevision(){

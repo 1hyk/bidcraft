@@ -188,9 +188,9 @@ def main() -> int:
     check("给了招标目录 → 返回 None（不再摆领域骨架，免得模型两边摇摆）",
           cg._chapter_skeleton(DOMAIN, {"chapters": [{"title": "第一章 总则"}]}), None)
     check("没给招标目录 → 用本领域声明的章骨架",
-          cg._chapter_skeleton(DOMAIN, None), list(chapters_of(DOMAIN)))
+          cg._chapter_skeleton(DOMAIN, None) or [], list(chapters_of(DOMAIN)))
     check("招标目录是空壳（chapters 为空）→ 仍走领域骨架",
-          cg._chapter_skeleton(DOMAIN, {"chapters": []}), list(chapters_of(DOMAIN)))
+          cg._chapter_skeleton(DOMAIN, {"chapters": []}) or [], list(chapters_of(DOMAIN)))
 
     # ---- 3. 一次 invoke 跑到底 ----
     thread_id = f"verify_compile_flow_{int(time.time())}"
@@ -223,8 +223,9 @@ def main() -> int:
           {c["title"]: [s["title"] for s in c["children"]] for c in state["toc"]["chapters"]},
           {k: [s for s in v] for k, v in SECTIONS.items()})
     check("章骨架只生成一次", rec["titles"], 1)
+    # 2026-10-20 起 lowalt 不再声明默认章名，chapters 为空；此时调用方传 None 与传 [] 等价。
     check("章骨架取自领域声明",
-          rec["skeleton_for_titles"], list(chapters_of(DOMAIN)))
+          rec["skeleton_for_titles"] or [], list(chapters_of(DOMAIN)))
     check("每章各调一次子节生成", rec["children"], CHAPTERS)
     check("子节也拿到了知识库骨架（子节层能吃到语料）",
           rec["children_skeletons"], [["知识库骨架·子节一"]] * len(CHAPTERS))

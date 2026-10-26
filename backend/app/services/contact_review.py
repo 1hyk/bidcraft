@@ -14,14 +14,16 @@ def contact_review_excerpts(text, known=()):
         line = line.strip()
         if not line:
             continue
-        clean = re.sub(r'[*_`]', '', line)
+        # 片段用于在编辑器里定位，必须给渲染后的纯文本：Markdown 的列表星号、粗体
+        # 标记在正文里并不存在，带标记的片段会定位失败（2026-10-23）。
+        clean = re.sub(r'[*_`]', '', line).strip()
         names = [m.group(1) for m in NAME.finditer(clean) if m.group(1) not in NOT_NAMES]
         names += [m.group(0) for m in HONORIFIC.finditer(clean)]
         names += [value for value in known if len(value) >= 2 and value in clean]
         phones = [m.group(0) for m in PHONE.finditer(clean)]
         if names or phones:
             token = (phones or names)[0]
-            start = max(0, line.find(token)-70)
-            yield line[start:start+240], '具体姓名或电话待人工确认：请核对身份、号码及使用用途；有来源也需确认，不代表公司人员或履约接口已核实'
+            start = max(0, clean.find(token)-70)
+            yield clean[start:start+240], '具体姓名或电话待人工确认：请核对身份、号码及使用用途；有来源也需确认，不代表公司人员或履约接口已核实'
         elif re.search(r'(?:姓名|联系人|联系电话|手机号|电话号码)\s*[：:]\s*(?:[_＿—-]+|待补充|待填写|待确认)?\s*$', clean):
-            yield line[:240], '联系信息待补充：正文明确设置了姓名或电话填写项，请据实填写或删除不必要的空项'
+            yield clean[:240], '联系信息待补充：正文明确设置了姓名或电话填写项，请据实填写或删除不必要的空项'

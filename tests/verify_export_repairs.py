@@ -9,6 +9,54 @@ from app.core.config import settings
 
 
 class ExportRepairs(unittest.TestCase):
+    def test_table_caption_without_blank_line_still_renders_table(self):
+        from app.services import docx_export as dx
+        md=('**表：典型用例清单表**\n'
+            '| 用例编号 | 用例名称 |\n'
+            '| :--- | :--- |\n'
+            '| TC-01 | 飞机接入连通性验证 |\n'
+            '后续说明文字。')
+        html=dx._normalize_body({'format':'md','body':md})
+        self.assertEqual(html.count('<table>'),1)
+        self.assertNotIn('| 用例编号 |',html)
+        self.assertIn('飞机接入连通性验证',html)
+        self.assertIn('后续说明文字',html)
+
+    def test_table_without_separator_still_renders(self):
+        from app.services import docx_export as dx
+        md=('表：典型用例清单表\n'
+            '| 用例编号 | 用例名称 |\n'
+            '| TC-01 | 飞机接入连通性验证 |\n'
+            '后续说明文字。')
+        html=dx._normalize_body({'format':'md','body':md})
+        self.assertEqual(html.count('<table>'),1)
+        self.assertNotIn('| 用例编号 |',html)
+        self.assertIn('飞机接入连通性验证',html)
+        self.assertIn('后续说明文字',html)
+
+    def test_fullwidth_pipe_table_still_renders(self):
+        from app.services import docx_export as dx
+        md=('表：典型用例清单表\n'
+            '｜用例编号｜用例名称｜\n'
+            '｜---｜---｜\n'
+            '｜TC-01｜飞机接入连通性验证｜')
+        html=dx._normalize_body({'format':'md','body':md})
+        self.assertEqual(html.count('<table>'),1)
+        self.assertIn('飞机接入连通性验证',html)
+        self.assertNotIn('｜用例编号｜',html)
+
+    def test_pipe_in_plain_text_and_fence_is_not_rewritten(self):
+        from app.services import docx_export as dx
+        md=('一项说明：甲 | 乙。\n'
+            '```\n'
+            '| 这不是表格 | 也不该补分隔行 |\n'
+            '```')
+        html=dx._normalize_body({'format':'md','body':md})
+        self.assertEqual(html.count('<table>'),0)
+        self.assertIn('甲 | 乙',html)
+        self.assertIn('这不是表格',html)
+        self.assertNotIn('| --- |',html)
+
     def test_feedback_survives_long_background_and_label_cleanup(self):
         feedback='主体改红色，保留跑道和指挥中心，不要文字'
         result=build_prompt({'name':'场景图','prompt':'背景描述'*1000,'purpose':'用途','_feedback':feedback},'qwen-image-2.0')

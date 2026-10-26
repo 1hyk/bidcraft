@@ -65,8 +65,11 @@ def requirement_group(row):
     from app.services.requirement_matrix import response_scope
     if row.get('category') == '编制要求':
         return 'document_rules'
-    if response_scope(row) == 'other_documents':
+    scope = response_scope(row)
+    if scope == 'other_documents':
         return 'bid_notices'
+    if scope == 'compilation_check':
+        return 'document_rules'
     if row.get('category') == '废标风险' and re.fullmatch(
             r'实质性条款(?:响应(?:无效|不满足)?|不满足|符合性|要求|偏离)', str(row.get('title') or '').strip()):
         return 'bid_notices'
@@ -114,30 +117,14 @@ def chapter_candidates(row, nodes):
     return [item[1] for item in ranked[:3]]
 
 
-def _arrangement_name(project_id, lot):
-    return f"arrangements_{project_id}_{hashlib.sha1(lot.encode()).hexdigest()[:12]}.json"
+def coverage_gaps(requirements, nodes):
+    """找出连候选章节都没有的技术要求。
 
-
-def _requirement_signature(row):
-    return hashlib.sha256(json.dumps([row.get(k) for k in ('title','content','source_file','source_location')], ensure_ascii=False).encode()).hexdigest()
-
-
-def save_arrangement(project_id, req_id, node_ids):
-    current = snapshot(project_id)
-    row = next((r for r in current['requirements'] if r['id'] == req_id and r['display_group'] == 'technical'), None)
-    allowed = {n['id'] for n in current['directory_nodes']}
-    ids = list(dict.fromkeys(node_ids))
-    if not row or any(n not in allowed for n in ids):
-        raise ValueError('要求或章节不属于当前项目标段，请刷新后重试')
-    name = _arrangement_name(project_id, current['lot'])
-    with _lock:
-        records = read(name, {})
-        if ids:
-            records[str(req_id)] = {'node_ids':ids, 'signature':_requirement_signature(row),
-                                    'node_titles':{str(n['id']):n['title'] for n in current['directory_nodes'] if n['id'] in ids}}
-        else:
-            records.pop(str(req_id), None)
-        write(name, records)
+    章节对应只用来提示目录缺口：没有候选章节说明目录可能漏项，需要补/调目录，
+    不是让用户逐条安排章节。有候选也不代表正文已经响应。
+    """
+    return [r for r in requirements
+            if requirement_group(r) == 'technical' and not chapter_candidates(r, nodes)]
 
 
 def snapshot(project_id):
@@ -155,17 +142,14 @@ def snapshot(project_id):
     requirements = [r for r in list_requirements(project_id) if r.get('status') != 'ignored']
     allowed = generation_node_ids(project_id)
     nodes = [n for n in query('SELECT id, title, outline FROM chapter_node WHERE project_id = %s ORDER BY sort_order, id', (project_id,)) if n['id'] in allowed]
-    records = read(_arrangement_name(project_id, lot), {})
     from app.services.requirement_matrix import response_scope
     for r in requirements:
         r['response_scope'] = response_scope(r)
         r['display_group'] = requirement_group(r)
         r['chapter_candidates'] = chapter_candidates(r,nodes)
-        record = records.get(str(r['id']), {})
-        ids = record.get('node_ids', []) if record.get('signature') == _requirement_signature(r) else []
-        r['arranged_chapters'] = [{'id':n['id'],'title':n['title']} for n in nodes if n['id'] in ids]
-        r['arrangement_stale'] = bool(record) and (len(r['arranged_chapters']) != len(record.get('node_ids', [])) or record.get('signature') != _requirement_signature(r)
-            or any(record.get('node_titles', {}).get(str(n['id'])) != n['title'] for n in r['arranged_chapters']))
+        r['has_corresponding_chapter'] = bool(r['chapter_candidates'])
+    gaps = coverage_gaps(requirements, nodes)
+    technical = [r for r in requirements if r['display_group'] == 'technical']
     selected = query_one('SELECT id FROM lot WHERE project_id = %s AND selected = 1', (project_id,))
     files = query("SELECT id, file_name, status, lot_id FROM project_file WHERE project_id = %s AND category IN ('tender','clarification') ORDER BY id", (project_id,))
     if selected:
@@ -177,10 +161,13 @@ def snapshot(project_id):
     return {'project':project, 'requirements':requirements, 'files':files, 'lot':lot,
             'directory_nodes':[{'id':n['id'],'title':n['title']} for n in nodes],
             'has_directory': bool(nodes),
+            # 只用于目录覆盖检查：有多少条技术要求找不到承接章节，以及具体是哪几条。
+            'coverage':{'technical':len(technical), 'unmatched':len(gaps),
+                        'requirement_ids':[r['id'] for r in gaps]},
             'fingerprint':fingerprint, 'notes':record.get('notes',''),
             'confirmed':record.get('fingerprint') == fingerprint,
             'confirmed_at':record.get('confirmed_at'),
-            'warning':'章节关联仅为候选位置，不代表正文已响应；请在成稿检查中核对。'}
+            'warning':'章节候选只用于检查目录是否漏项，不代表正文已响应；请在成稿检查中核对。'}
 
 
 def confirm(project_id, fingerprint, notes):

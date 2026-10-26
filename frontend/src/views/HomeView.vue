@@ -4,10 +4,9 @@
       <div class="welcome-copy">
         <span class="welcome-eyebrow">嘉驰科技咨询 · 技术方案工作台</span>
         <h1>技术方案，从这里开始</h1>
-        <p>以招标要求为依据，结合公司资料与历史经验，完成编写、检查与导出。</p>
+        <p>以招标要求为依据，结合历史经验，完成编写、检查与导出。</p>
         <div class="welcome-actions">
           <el-button type="primary" size="large" @click="openCreate">＋ 新建编制项目</el-button>
-          <router-link to="/company">管理公司资料 <span>↗</span></router-link>
         </div>
       </div>
       <ol class="welcome-flow" aria-label="方案编制流程">

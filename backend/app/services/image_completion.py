@@ -7,6 +7,10 @@ from app.services.generated_images import eligible, generate, ImageGenerationErr
 from app.services.image_retrieval import bind_references, selected_ids
 
 
+class HistoryUnavailable(ImageGenerationError):
+    """历史素材不可用或核验失败：留待人工重新确认，不自动付费生图。"""
+
+
 def has_requests(ctx: dict) -> bool:
     return any(eligible(n) for n in (ctx.get("outline") or {}).get("image_needs") or [])
 
@@ -15,7 +19,7 @@ def _choose_history(need: dict, refs: list[dict]) -> dict | None:
     if need.get('asset_id'):
         asset = next((a for a in refs if a['asset_id'] == need['asset_id']), None)
         if asset is None:
-            raise ImageGenerationError('思路指定的历史素材当前不可用，请重新确认配图，未自动付费生图')
+            raise HistoryUnavailable('思路指定的历史素材当前不可用，请重新确认配图，未自动付费生图')
         return asset
     if not refs:
         return None
@@ -34,12 +38,12 @@ def _choose_history(need: dict, refs: list[dict]) -> dict | None:
         ], temperature=0, max_tokens=256, timeout=45)
         identity = extract_json(raw).get("asset_id")
     except Exception:
-        raise ImageGenerationError("历史图片核验失败，未自动付费生图，请稍后重试") from None
+        raise HistoryUnavailable("历史图片核验失败，未自动付费生图，请稍后重试") from None
     if identity is None:
         return None
     chosen = next((a for a in refs if a["asset_id"] == identity), None)
     if chosen is None:
-        raise ImageGenerationError("历史图片核验返回无效素材ID，未自动生图")
+        raise HistoryUnavailable("历史图片核验返回无效素材ID，未自动生图")
     return chosen
 
 
@@ -84,6 +88,9 @@ def complete(ctx: dict, body: str, project_id: int, node_id: int) -> str:
                 if ctx.get("image_search_ok") is False:
                     raise ImageGenerationError("历史素材检索暂不可用")
                 asset = _choose_history(need, refs)
+            except HistoryUnavailable:
+                # 思路点名的历史素材不可用或核验失败：不自动生图，交给人工重新确认。
+                raise
             except ImageGenerationError as exc:
                 reviews.append({'name':name,'reason':str(exc)+'；已尝试AI示意替代，请核对'})
                 asset = None
@@ -99,12 +106,29 @@ def complete(ctx: dict, body: str, project_id: int, node_id: int) -> str:
             body = _place(body, name, marker, present)
         except Exception as exc:
             reason = str(exc) if isinstance(exc, ImageGenerationError) else "配图处理失败，请查看后端日志"
+            if isinstance(exc, HistoryUnavailable):
+                # 历史图未通过核验时可能已被 bind_references 自动挂上素材ID；
+                # 先去绑再移除，避免未经核验的图沿占位流入导出件。
+                body = _unbind_placeholder(body, name)
             body, anchor = remove_failed_placeholder(body, name)
             errors.append({"name": name, "reason": reason, "context":anchor})
     ctx["image_refs"] = refs
     ctx["image_generation_errors"] = errors
     ctx["image_review_warnings"] = reviews
     return body
+
+
+def _unbind_placeholder(body: str, name: str) -> str:
+    """去掉与失败需求同名占位上的素材ID，让后续清理能移除此占位。"""
+    def replace(match):
+        raw = match.group(1).strip()
+        label = re.split(r"\|\s*素材ID", raw, maxsplit=1)[0].strip()
+        if label == name or label.startswith(name + "/") or label.startswith(name + "／"):
+            return f"[图片占位：{label}]"
+        return match.group(0)
+    parts = re.split(r"(```.*?```)", body, flags=re.S)
+    return "".join(part if part.startswith("```") else re.sub(
+        r"\[图片占位[：:]\s*([^\]]+)\]", replace, part) for part in parts)
 
 
 def remove_failed_placeholder(body: str, name: str) -> tuple[str, str]:

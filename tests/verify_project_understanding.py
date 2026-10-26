@@ -35,9 +35,12 @@ class Understanding(unittest.TestCase):
             with self.assertRaises(ValueError):service.confirm(6,'a','')
 
     def test_stale_notes_never_enter_generation(self):
-        with patch.object(service,'company_context',return_value='公司资料'),patch.object(service,'snapshot',return_value={'confirmed':False,'notes':'旧范围'}):
-            self.assertEqual(service.generation_context(6),'公司资料')
-        with patch.object(service,'company_context',return_value='公司资料'),patch.object(service,'snapshot',return_value={'confirmed':True,'notes':'新范围'}):
+        project={'project_types':[],'service_content':'','technical_objects':[]}
+        with patch.object(service,'company_context',return_value='公司资料'),patch.object(service,'snapshot',return_value={'confirmed':False,'notes':'旧范围','project':project}):
+            context=service.generation_context(6)
+            self.assertIn('公司资料',context)
+            self.assertNotIn('旧范围',context)
+        with patch.object(service,'company_context',return_value='公司资料'),patch.object(service,'snapshot',return_value={'confirmed':True,'notes':'新范围','project':project}):
             self.assertIn('新范围',service.generation_context(6))
 
     def test_snapshot_invalidated_by_requirement_or_outline_change(self):

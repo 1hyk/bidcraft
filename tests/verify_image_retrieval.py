@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from PIL import Image
 from docx import Document
 from app.services import image_retrieval as retrieval, section_service
+from app.services.generated_images import VISUAL_CHECK_VERSION
 from app.services.image_ownership import ProjectImages
 from app.services.docx_export import _render_html
 from app.core.docx_style import DocxStyle
@@ -39,7 +40,7 @@ class ImageRetrievalTests(unittest.TestCase):
         node={'title':self.ref['caption'],'outline':{'need_image':True}}
         old={**self.ref,'generated':True}
         self.assertEqual(retrieval.candidates(node,[old]),[])
-        approved={**old,'validated':True}
+        approved={**old,'validated':True,'visual_check_version':VISUAL_CHECK_VERSION}
         self.assertEqual(retrieval.candidates(node,[approved])[0]['asset_id'],self.id_a)
 
     def test_independent_recall_and_ownership(self):
@@ -113,10 +114,13 @@ class ImageRetrievalTests(unittest.TestCase):
         self.assertIn(self.ref["caption"], text)
 
     def test_explicit_image_needs_route_history_mermaid_and_material(self):
-        for source in ["mermaid", "material"]:
-            node = {"title": "无人机现场照片", "outline": {"image_needs": [
-                {"name": self.ref["caption"], "source": source}]}}
-            self.assertEqual(retrieval.candidates(node, [self.ref]), [])
+        # mermaid 自绘不查历史图；material 需要真实材料，但检索层仍要给历史候选，
+        # 否则整章候选为空，写手/补齐连"要不要复用"的判断都做不了。
+        node = {"title": "无人机现场照片", "outline": {"image_needs": [
+            {"name": self.ref["caption"], "source": "mermaid"}]}}
+        self.assertEqual(retrieval.candidates(node, [self.ref]), [])
+        node["outline"]["image_needs"][0]["source"] = "material"
+        self.assertEqual(retrieval.candidates(node, [self.ref])[0]["asset_id"], self.id_a)
         node["outline"]["image_needs"][0]["source"] = "history"
         self.assertEqual(retrieval.candidates(node, [self.ref])[0]["asset_id"], self.id_a)
         code = f"```\n[图片占位：照片|素材ID={self.id_a}]\n```"

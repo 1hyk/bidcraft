@@ -650,6 +650,10 @@ def _rewrite_section(node_id: int, project_id: int, content: str, summary: str) 
             prev_body, prev_format = old.get("body", ""), old.get("format", "md")
         except (TypeError, ValueError):
             pass
+    from app.services.mermaid_source import normalize_body
+    from app.services.document_checks import clean_requirement_refs
+
+    content = clean_requirement_refs(normalize_body(content), project_id)
     payload = json.dumps(
         {"format": "md", "body": content, "prev_content": prev_body, "prev_format": prev_format},
         ensure_ascii=False,

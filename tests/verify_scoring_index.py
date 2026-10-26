@@ -16,15 +16,48 @@ class ScoringIndexTests(unittest.TestCase):
             return dict(content=content, category=category, **kw)
         self.assertTrue(index_required([row('响应人须根据评分细则编制索引目录（填写对应证明材料的所在页码）。')]))
         self.assertTrue(index_required([row('投标人应提供技术响应索引表。')]))
+        self.assertTrue(index_required([row('响应人须编制索引。')]))
+        self.assertTrue(index_required([row('应设置索引列明证明材料页码。')]))
         for rows in ([], [row('附件：评分表，序号、分值、页码')],
                      [row('无需编制索引目录')], [row('可不提供响应索引表')],
                      [row('应编制索引目录', status='ignored')],
+                     [row('应填写索引号')],
                      [row('须提供索引表', category='评分办法')]):
             self.assertFalse(index_required(rows))
 
+    def test_tender_text_fallback_reads_pdf(self):
+        import tempfile
+        from pathlib import Path
+        from app.services import scoring_index
+        class Page:
+            def extract_text(self):
+                return '响应人须编制索引目录，填写证明材料页码。'
+        class Pdf:
+            pages=[Page()]
+            def __enter__(self): return self
+            def __exit__(self,*args): return False
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory,'tender.pdf').write_bytes(b'%PDF-1.4')
+            with patch('app.core.database.query',
+                       return_value=[{'file_path':'tender.pdf'}]), \
+                 patch('app.core.config.settings.uploads_dir',Path(directory)), \
+                 patch('pdfplumber.open',return_value=Pdf()):
+                self.assertIn('编制索引目录', scoring_index._tender_text(987))
+        scoring_index._tender_text_cache.clear()
+
+    def test_extraction_miss_still_reads_tender_text(self):
+        with patch('app.services.scoring_index._tender_text',
+                   return_value='响应人须根据评分细则编制索引目录（填写对应证明材料的所在页码）。'):
+            self.assertTrue(index_required([], project_id=29))
+        with patch('app.services.scoring_index._tender_text',
+                   return_value='附件：评分表，序号、分值、页码'):
+            self.assertFalse(index_required([], project_id=30))
+
     def test_scoring_items_alone_do_not_export_index(self):
         with patch('app.services.requirement_service.list_requirements', return_value=[
-            {'category':'评分办法', 'title':'维护保障'}]), patch('app.services.section_service.get_tree') as tree:
+            {'category':'评分办法', 'title':'维护保障'}]), \
+             patch('app.services.scoring_index._tender_text', return_value=''), \
+             patch('app.services.section_service.get_tree') as tree:
             self.assertEqual(project_index(8), [])
             tree.assert_not_called()
 

@@ -28,11 +28,11 @@ class EditorImages(unittest.TestCase):
         self.assertEqual((r['width'],r['height']),(100,80));self.assertNotIn('path',r);self.assertNotIn('prompt',r)
         self.assertEqual(r['caption'],'场景示意（AI生成示意）')
     def test_regeneration_returns_candidate_and_requests_native_resolution(self):
-        with patch('app.services.section_service.generation_node_ids',return_value={706}),patch.object(settings,'image_generation_model','qwen-image-2.0'),patch.object(api.generated_images,'generate',return_value=self.asset) as generate:
+        with patch.object(settings,'uploads_dir',self.directory),patch('app.services.section_service.generation_node_ids',return_value={706}),patch.object(settings,'image_generation_model','qwen-image-2.0'),patch.object(api.generated_images,'generate',return_value=self.asset) as generate:
             r=self.client.post('/api/projects/20/image-assets/regenerate',json={'asset_id':self.asset['asset_id'],'node_id':706,'feedback':'突出高度分层','quality':'high','request_id':'test-request-1'})
         self.assertEqual(r.status_code,200)
         need=generate.call_args.args[2]
-        self.assertEqual(need['_generation_size'],'2048*1536')
+        self.assertEqual(need['_generation_size'],'2048*1632')  # 100×80 按长边缩到 2048 并取 16 的倍数
         self.assertTrue(api.generated_images.eligible(need),'API生成的需求必须通过实际生图入口校验')
         self.assertEqual(need['_feedback'],'突出高度分层');self.assertNotIn('test-request-1',need['prompt'])
         self.assertEqual(generate.call_args.args[3],'','does not send the whole chapter')
@@ -54,7 +54,7 @@ class EditorImages(unittest.TestCase):
         self.assertEqual(len(doc.inline_shapes),1)
         text=''.join(p.text for p in doc.paragraphs)
         self.assertIn('前文',text);self.assertIn('后文',text);self.assertNotIn('IMG-',text);self.assertNotIn('old-id',text)
-        self.assertNotIn('待人工核对',text);self.assertIn('AI生成示意',text)
+        self.assertNotIn('待人工核对',text);self.assertIn('场景示意',text);self.assertNotIn('AI生成示意',text)
 
     def test_custom_caption_survives_export_without_renaming_asset(self):
         self.asset['generated']=True
@@ -63,7 +63,7 @@ class EditorImages(unittest.TestCase):
         text=''.join(p.text for p in doc.paragraphs)
         self.assertIn('人工修改的图名',text)
         self.assertNotIn('人工修改的图名（AI生成示意）',text)
-        self.assertIn('AI生成示意',text)
+        self.assertNotIn('AI生成示意',text)
         self.assertNotIn('自定义图注',text);self.assertNotIn('IMG-',text)
         self.assertEqual(self.asset['caption'],'场景示意')
 
@@ -79,7 +79,7 @@ class EditorImages(unittest.TestCase):
 
     def test_scene_regeneration_retains_original_context(self):
         self.asset['generation_need']={'purpose':'局部场地的跑道与机巢布置','prompt':'包括跑道、机巢和垂直高度层'}
-        with patch('app.services.section_service.generation_node_ids',return_value={706}),patch.object(settings,'image_generation_model','qwen-image-2.0'),patch.object(api.generated_images,'generate',return_value=self.asset) as generate:
+        with patch.object(settings,'uploads_dir',self.directory),patch('app.services.section_service.generation_node_ids',return_value={706}),patch.object(settings,'image_generation_model','qwen-image-2.0'),patch.object(api.generated_images,'generate',return_value=self.asset) as generate:
             r=self.client.post('/api/projects/20/image-assets/regenerate',json={'asset_id':self.asset['asset_id'],'node_id':706,'feedback':'减少背景细节','quality':'high','request_id':'test-request-2'})
         self.assertEqual(r.status_code,200)
         self.assertIn('垂直高度层',generate.call_args.args[2]['prompt'])

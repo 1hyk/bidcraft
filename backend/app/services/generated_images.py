@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 from app.core.config import settings
 from app.services.image_prompt import visual_style
 
-VISUAL_CHECK_VERSION = 2
+VISUAL_CHECK_VERSION = 3
 
 _locks: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
@@ -158,18 +158,24 @@ def validate_visual(path: Path, need: dict) -> None:
         im.thumbnail((1280, 1280))
         buf = io.BytesIO()
         im.save(buf, format='JPEG', quality=90)
+    style = visual_style(need)
     result = extract_json(llm.chat([{'role':'user','content':[
         {'type':'text','text':'核查这张AI生成场景是否符合需求。不接受仅色调相似；检查透视、比例、物体结构、摆放与空间关系，拒绝拼贴、不合理悬浮或设备变形。'
-         '画面风格必须符合：'+visual_style(need)+'。'
+         '画面风格必须符合：'+style+'。'
+         '若为 photorealistic，还要检查有无图解叠加：虚线、箭头、引线、圈注、测量线、半透明覆盖扇区、'
+         '悬浮图标，或只为表示关系而画的连线/光束，有则 has_schematic_overlay=true。'
          '同时检查有无任何可见文字、乱码、字母标签或水印。只输出JSON：'
-         '{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"reason":""}。需求：'
+         '{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"has_schematic_overlay":false,"reason":""}。需求：'
          +str(need.get('name') or '')+'；'+str(need.get('purpose') or '')},
         {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+
          base64.b64encode(buf.getvalue()).decode()}}]}], model=settings.vision_model,
          temperature=0, max_tokens=500, timeout=60))
+    # 图解叠加只对写实图是缺陷；示意图本来就该有分区色块、边界和航线线条。
+    overlay_bad = style == 'photorealistic' and result.get('has_schematic_overlay') is not False
     if (result.get('relevant') is not True or result.get('has_text') is not False
-            or result.get('style_matches') is not True or result.get('physical_plausible') is not True):
-        raise ImageGenerationError('生成图未通过主题、文字、风格或实物合理性核验：'+str(result.get('reason') or '需重新检查')[:150])
+            or result.get('style_matches') is not True or result.get('physical_plausible') is not True
+            or overlay_bad):
+        raise ImageGenerationError('生成图未通过主题、文字、风格、图解叠加或实物合理性核验：'+str(result.get('reason') or '需重新检查')[:150])
 
 
 def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
@@ -262,6 +268,11 @@ def generate(project_id: int, node_id: int, need: dict, body: str) -> dict:
         except Exception as exc:
             validated = False
             review_reason = str(exc) if isinstance(exc, ImageGenerationError) else '生成图视觉核验暂不可用，需人工检查'
+        if need.get('data_structure') == 'spatial_layout' and visual_style(need) == 'photorealistic':
+            # 用户明确要求把空间信息图改成实景图：允许，但必须留下信息丢失提示。
+            note = ('已按你的要求改为实景图；原图中的航线、覆盖范围等空间信息未保留，'
+                    '请确认正文不再依赖这些信息，并同步核对图名')
+            review_reason = f'{review_reason}；{note}' if review_reason else note
         record = _record(project_id,node_id,path,caption,need,prompt,validated,review_reason,substitute)
         temp = root / (cache_key + ".json.tmp")
         temp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -292,25 +303,36 @@ def build_edit_prompt(need):
     feedback = str(need.get('_feedback') or '').strip()
     if not feedback:
         raise ValueError('请说明希望修改当前图的哪个部分')
+    if visual_style(need) == 'photorealistic':
+        style_rule = '写实画面不要添加虚线、箭头、引线、圈注、覆盖扇区或发光连线等图解叠加。'
+    else:
+        style_rule = ('这是空间示意图：保留并按要求调整分区色块、边界、航线/航路线条和点位等图解元素，'
+                      '线条清晰、层次简洁，不画图内文字。')
     prompt = ('请编辑输入的原图，不要重新设计整张图。仅按以下修改意见调整；未提及的主体、构图、视角、'
               '颜色和已有细节尽量保持一致，不额外添加图题、说明文字或水印。'
-              '修改意见优先于原始绘图描述。用户修改意见：'+feedback)
+              + style_rule + '修改意见优先于原始绘图描述。用户修改意见：'+feedback)
     if len(prompt.encode('utf-8')) > 3600:
         raise ValueError('修改意见过长，请缩短为需要修改和保留的重点')
     return prompt
 
 
-def describe_redesign(path, feedback, name, purpose):
+def describe_redesign(path, feedback, name, purpose, style='photorealistic'):
     import base64
     from PIL import Image
     from app.services.llm import llm
     from app.agents.json_util import extract_json
+    if style == 'photorealistic':
+        style_rule = '写实场景只描述真实物体及其相对位置，不写虚线、箭头、引线、圈注、覆盖扇区或发光连线。'
+    else:
+        style_rule = ('这是空间示意图：用分区色块、边界、航线/航路线条和点位表达布局，'
+                      '不追求照片质感；不写图内文字。')
     with Image.open(path) as im:
         im=im.convert('RGB');im.thumbnail((1280,1280))
         buf=io.BytesIO();im.save(buf,format='JPEG',quality=90)
     result=extract_json(llm.chat([{'role':'user','content':[
         {'type':'text','text':'查看当前图片，结合用途与修改意见，写一段完整的新场景绘图描述。'
          '这是重新设计，不必保留旧构图；用户指出要去除的元素不能带入新图。'
+         +style_rule+
          '只输出JSON {"prompt":"不超过200字的绘图描述"}。不编造真实证明，不生成图内标题或标签。'
          +json.dumps({'图名':name,'用途':purpose,'用户意见':feedback},ensure_ascii=False)},
         {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(buf.getvalue()).decode()}}

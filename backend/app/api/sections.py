@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.database import execute, query, query_one
+from app.services.mermaid_source import normalize_payload_body
 from app.services.section_service import get_tree
 
 router = APIRouter(prefix="/api/sections", tags=["sections"])
@@ -320,7 +321,11 @@ def put_content(node_id: int, body: ContentBody):
             pass
         was_ai = bool(old.get("ai_generated"))
 
-    payload = json.dumps({**old_p, "format": body.format, "body": body.body}, ensure_ascii=False)
+    from app.services.document_checks import clean_requirement_refs
+    saved_body = clean_requirement_refs(
+        normalize_payload_body(body.body, body.format), row["project_id"]
+    )
+    payload = json.dumps({**old_p, "format": body.format, "body": saved_body}, ensure_ascii=False)
     if old:
         execute(
             "UPDATE section_content SET content = %s, ai_generated = 0 WHERE chapter_node_id = %s",
@@ -333,12 +338,12 @@ def put_content(node_id: int, body: ContentBody):
         )
     execute("UPDATE chapter_node SET status = 'confirmed' WHERE id = %s", (node_id,))
 
-    if was_ai and old_body and old_body.strip() != body.body.strip():
+    if was_ai and old_body and old_body.strip() != saved_body.strip():
         from app.services.experience_service import distill_edit_task
         from app.services.task_runner import task_runner
 
         task_runner.submit("distill_exp", node_id, distill_edit_task,
-                           row["project_id"], row["title"], old_body, body.body)
+                           row["project_id"], row["title"], old_body, saved_body)
     r2 = query_one("SELECT updated_at FROM section_content WHERE chapter_node_id = %s", (node_id,))
     return {"ok": True, "saved_at": str(r2["updated_at"]) if r2 else ""}
 
@@ -373,7 +378,13 @@ def revert_content(node_id: int):
     rejected_body = payload.get("body", "")
     prev = payload.pop("prev_content", "")
     fmt = payload.pop("prev_format", "md")
-    new_payload = json.dumps({"format": fmt, "body": prev}, ensure_ascii=False)
+    from app.services.document_checks import clean_requirement_refs
+    restored = normalize_payload_body(prev, fmt)
+    if restored and node:
+        restored = clean_requirement_refs(restored, node["project_id"])
+    new_payload = json.dumps(
+        {"format": fmt, "body": restored}, ensure_ascii=False
+    )
     execute(
         "UPDATE section_content SET content = %s, ai_generated = 0 WHERE chapter_node_id = %s",
         (new_payload, node_id),

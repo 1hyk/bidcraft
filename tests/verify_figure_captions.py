@@ -55,3 +55,28 @@ with patch.object(dx, '_render_mermaid', side_effect=lambda d,s,c: d.add_paragra
 assert doc.paragraphs[-1].text == '测试流程设计流程图'
 assert doc.paragraphs[-1].alignment == WD_ALIGN_PARAGRAPH.CENTER
 print('PASS: missing Mermaid caption derived from local heading')
+
+# 导出件是给客户看的正式稿：「AI生成示意」是内部生成方式标记，图注和占位里都不该出现。
+from app.services.image_caption import print_caption
+assert print_caption('现场布置示意图（AI生成示意）') == '现场布置示意图'
+assert print_caption('现场布置示意图（AI生成示意，待人工核对）') == '现场布置示意图'
+assert print_caption('数据曲线（AI生成示意，数据仅作示例，非实测结果）') == '数据曲线（数据仅作示例，非实测结果）'
+assert print_caption('现场布置示意图（ AI 生成示意 ）') == '现场布置示意图'
+print('PASS: print caption drops AI-generation marker variants')
+
+for before in (True, False):
+    doc = Document()
+    figure = '<pre><code class="language-mermaid">flowchart TD\nA--&gt;B</code></pre>'
+    caption = '<p data-figure-caption="true">大安机场现场布置示意图（AI生成示意）</p>'
+    html = (caption + figure) if before else (figure + caption)
+    with patch.object(dx, '_render_mermaid', side_effect=lambda d,s,c: d.add_paragraph('[图片]')):
+        dx._render_html(doc, DocxStyle(), html)
+    assert [p.text for p in doc.paragraphs] == ['[图片]', '大安机场现场布置示意图'], [p.text for p in doc.paragraphs]
+print('PASS: figure captions exported without AI-generation marker')
+
+doc = Document()
+dx._render_html(doc, DocxStyle(), '<p>正文</p><p>[图片占位：大安机场布置示意图（AI生成示意）|素材ID=IMG-0123456789abcdef01234567]</p>',
+                images={})
+assert 'AI生成示意' not in doc.paragraphs[1].text, doc.paragraphs[1].text
+assert '大安机场布置示意图' in doc.paragraphs[1].text
+print('PASS: unresolved image placeholder exported without AI-generation marker')
