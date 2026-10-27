@@ -214,7 +214,8 @@ def sanitize_text(text: str) -> str:
 
 
 # 这些键参与目录匹配或与数据库标题对齐，改了会让思路挂错节点，保持原样。
-_STRUCTURAL_KEYS = {"_path", "_toc_title", "chapter_title", "title"}
+# chapter_title 不在其中：它只进编写提示，清洗后能防止写手按“交付物清单”旧题展开。
+_STRUCTURAL_KEYS = {"_path", "_toc_title", "title"}
 
 
 def sanitize_obj(obj):
