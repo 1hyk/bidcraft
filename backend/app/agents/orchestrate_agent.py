@@ -334,11 +334,10 @@ def generate_outline(
         + f"本项目事实（可引用；缺失时按拟实施方案处理，不编造真实数据）：{facts}\n"
         f"相关的历史知识页标题（仅供提示本类章节存在，其内容不作为编写参考）：{pages}\n"
     )
-    assets, preference = [], ''
+    assets = []
     if project_id is not None:
-        from app.services.image_planning import outline_assets, outline_preference
+        from app.services.image_planning import outline_assets
         assets = outline_assets(project_id, chapter_title, reqs_text)
-        preference = outline_preference(project_id)
     if assets:
         user += '\n【可复用图片候选（已按领域、归属过滤，含视觉描述）】\n' + json.dumps([
             {k: a.get(k) for k in ('asset_id','caption','kind','content','source_title')}
@@ -346,8 +345,6 @@ def generate_outline(
         user += ('\n先判断这些图片是否确实适合本章，适合才以 source=history、原始 caption 为 name、'
                  '原始 asset_id 编入 image_needs；不得将其他项目图片当作本项目实证，也不要为复用而硬选。'
                  '只有候选均不满足，才规划新的概念插图；表格与矩阵使用 need_table，不要文生图。')
-    if preference:
-        user += '\n' + preference
     raw = llm.chat(
         [
             {"role": "system", "content": fill_genre(OUTLINE_SYSTEM, domain)},

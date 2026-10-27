@@ -251,10 +251,6 @@ export const getPagePlan = (projectId) => api.get(`/projects/${projectId}/page-p
 export const savePagePlan = (projectId, payload) => api.put(`/projects/${projectId}/page-plan`, payload)
 export const measurePagePlan = (projectId) => api.post(`/projects/${projectId}/page-plan/measure`, null, { timeout: 600000 })
 export const adjustPagePlan = (projectId) => api.post(`/projects/${projectId}/page-plan/adjust`)
-// ---------- 配图偏好（规划阶段倾向） ----------
-// 只影响之后重新生成的编写思路；已确认的思路不会被改写。
-export const getImagePolicy = (projectId) => api.get(`/projects/${projectId}/image-policy`)
-export const saveImagePolicy = (projectId, policy) => api.put(`/projects/${projectId}/image-policy`, { policy })
 export const checkProposal = (projectId) => api.get(`/export/${projectId}/check`)
 export const resolveProposalIssue = (projectId, data) => api.post(`/export/${projectId}/issues/resolve`, data)
 export const reviewProposal = (projectId) => api.post(`/export/${projectId}/review`, null, { timeout: 300000 })

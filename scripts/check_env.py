@@ -201,16 +201,6 @@ def migrate_db() -> str:
             cur.execute("ALTER TABLE project ADD COLUMN toc_hint JSON NULL"
                         " COMMENT '招标文件规定的施组目录（目录生成优先采用）'")
             applied.append("project.toc_hint")
-        # project.image_policy（项目级配图偏好，2026-10-23 新增）
-        cur.execute(
-            "SELECT COUNT(*) c FROM information_schema.COLUMNS"
-            " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project'"
-            " AND COLUMN_NAME = 'image_policy'"
-        )
-        if cur.fetchone()["c"] == 0:
-            cur.execute("ALTER TABLE project ADD COLUMN image_policy JSON NULL"
-                        " COMMENT '配图规划偏好（如涉及现场/实物时优先写实场景图）'")
-            applied.append("project.image_policy")
         # knowledge_doc.file_md5 / project_file.file_md5（同文件跳过重复解析，2026-09-04 新增）
         for table in ("knowledge_doc", "project_file"):
             cur.execute(

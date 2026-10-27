@@ -1,5 +1,4 @@
 """配图规划校验：表格、关系图、插图各走一条链路，图名与素材 ID 同源。"""
-import json
 import re
 
 RELATION = re.compile(r'流程|架构|组织图|时序|甘特|横道|进度计划|拓扑|时间轴|思维导图|因果|逻辑图|关系图|切换示意图|自动切换|(?<![A-Za-z])WBS(?![A-Za-z])|工作分解|任务分解|功能(?:模块|点)分布|模块关系|生命周期|批次划分|权限关系|分类分级', re.I)
@@ -135,42 +134,3 @@ def outline_assets(project_id: int, title: str, reqs: str = '') -> list[dict]:
     from app.services.image_retrieval import catalog, candidates
     return candidates({'title': title, 'outline': {'thinking': reqs, 'need_image': True}},
                       catalog(project_id), limit=8)
-
-
-# ---------------------------------------------------------------- 项目级配图偏好
-
-# 规划阶段默认按「信息载体」判断画风（见 spatial_style）。项目可以再标一条偏好，
-# 对现场/实物内容优先考虑写实场景图。偏好只影响规划倾向，**不能推翻语义硬约束**：
-# 信息靠分区、航线、覆盖范围等图示符号承载时仍必须是 spatial_layout。白名单之外
-# 的键一律丢弃，避免库里留一份没人读的配置。
-
-DEFAULT_POLICY = {'prefer_photorealistic_scene': False}
-
-
-def normalize_policy(raw=None) -> dict:
-    """宽松解析（读库/收请求共用）：坏值回到默认，键做白名单。"""
-    data = raw
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except ValueError:
-            data = None
-    if not isinstance(data, dict):
-        data = {}
-    return {key: bool(data.get(key, default)) for key, default in DEFAULT_POLICY.items()}
-
-
-def outline_preference(project_id: int | None) -> str:
-    """给编写思路提示词追加项目偏好；未设置时返回空串。"""
-    if project_id is None:
-        return ''
-    from app.core.database import query_one
-    row = query_one('SELECT image_policy FROM project WHERE id = %s', (project_id,))
-    if not normalize_policy((row or {}).get('image_policy'))['prefer_photorealistic_scene']:
-        return ''
-    return ('【项目配图偏好】本项目标书正文涉及真实现场、设备、场地或作业过程时，优先规划写实场景图'
-            '（data_structure=physical_scene，source=illustration，visual_style=photorealistic），'
-            '让读者看到真实物体及其摆位。仍按信息载体判断：分区、航线、覆盖范围等现实中不可见的'
-            '图示信息用 spatial_layout，不要为了偏好把示意图改成写实图，也不要为凑图新增需求。'
-            '同一张图既需要现场实景、又需要航线/覆盖/分区信息时，拆成两张分别规划：'
-            '一张写实场景图 + 一张空间信息图，不要合并。')
