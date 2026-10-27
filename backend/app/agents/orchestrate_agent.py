@@ -46,7 +46,7 @@ OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，�
    history 仅在内容属于可合成示意时设 allow_generated=true，真实照片、截图、证照、
    检测报告等必须设 false；不得为获取配图而把真实材料改称概念示意。
    图表应服务于内容，不要为了配图而凑图。
-   每项补充 content_origin：proposal_design（我方拟议安排）或 external_evidence（外部真实材料）；
+   每项补充 content_origin：proposal_design（我方方案安排）或 external_evidence（外部真实材料）；
    data_structure 按实际内容填写：records（记录）、assignment（岗位/班次分配）、comparison（对照）、
    measurements（数据）、timeline（任务时间跨度）、process（流程）、hierarchy（层级）、
    relationships（关系）、physical_scene（真实物体/场地的外观与摆位）、
@@ -330,7 +330,7 @@ def generate_outline(
            if lot_brief else "")
         + (f"用户经验与偏好（必须体现到思路中）：\n{exp_text}\n" if exp_text else "")
         + (f"本章相关的招标要求（编写依据，必须响应）：\n{reqs_text}\n" if reqs_text else "")
-        + f"本项目事实（可引用，无则标注待补充）：{facts}\n"
+        + f"本项目事实（可引用；缺失时按拟实施方案处理，不编造真实数据）：{facts}\n"
         f"相关的历史知识页标题（仅供提示本类章节存在，其内容不作为编写参考）：{pages}\n"
     )
     assets, preference = [], ''

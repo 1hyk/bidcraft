@@ -213,7 +213,7 @@
             <span>{{ currentWorkflowStep === 2 ? '整理目录' : '文档目录' }}</span>
             <div class="toc-head-right">
               <button v-if="stage === 'done' && currentWorkflowStep === 3" class="toc-batch-btn ghost" :disabled="!canWriteAll" @click="writeAllChapters">继续编写待写章节</button>
-              <span v-if="tocChapters.length" class="toc-count num">{{ treeCount(tocChapters) }}</span>
+              <span v-if="tocChapters.length" class="toc-count num">{{ treeCount(displayTree.body) }}</span>
               <button v-if="unwrittenCount" class="toc-batch-btn ghost" :disabled="outlinesGen" :title="'为 ' + unwrittenCount + ' 个尚无思路的章节生成编写思路'" @click="genOutlines">
                 {{ outlinesGen ? '思路生成中…' : '生成思路' }}<i v-if="unwrittenCount" class="toc-unw-num num">{{ unwrittenCount }}</i>
               </button>
@@ -785,7 +785,7 @@ import { useRouter,onBeforeRouteLeave,onBeforeRouteUpdate } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listFiles, uploadFile, deleteProjectFile, reparseProjectFile, chatStream, getChatHistory, clearChatHistory, compileStart, compileStatus, writeAll, taskStatus, listFacts, selectLot, extractLots, getLotsStatus, getLotProfile, saveLotProfile, rebuildLotProfile, getLotProfileRebuildStatus, getUsedDetail, tocPreview, tocApply, generateTreeOutlines, listKnowledgePages, getKnowledgePage, listRequirements,
   writeBatch, writeStop, generateSectionStream,
-  getChapterTree, syncScoringIndex, createChapterNode, updateChapterNode, deleteChapterNode,
+  getChapterTree, createChapterNode, updateChapterNode, deleteChapterNode,
   getSectionContent, saveSectionContent, confirmSection, revertSection, putNodeOutline,
   regenerateNodeOutline, runningOutlineTasks, exportProjectDocx,
   listProjects, listDomains } from '../api'
@@ -794,7 +794,6 @@ import TiptapEditor from '../components/TiptapEditor.vue'
 import FactDrawer from '../components/FactDrawer.vue'
 import ProjectUnderstandingPanel from '../components/ProjectUnderstandingPanel.vue'
 import DirectoryPlanningPanel from '../components/DirectoryPlanningPanel.vue'
-import {splitDocumentTree} from '../documentTree'
 import {workflowStep,openUnderstandingOnEntry,saveBeforeWorkflow} from '../workflowStep'
 const bodyEditor = ref(null)
 let pendingBodySave = Promise.resolve()
@@ -978,8 +977,13 @@ const total = ref(0)
 const error = ref('')
 const tocChapters = ref([])
 const directoryLoaded = ref(false)
-const indexRequired = ref(false)
-const displayTree = computed(()=>splitDocumentTree(tocChapters.value,indexRequired.value))
+// 目录不再自动挂“技术评分响应索引”节点；历史项目里已有的同类节点也不在正文目录显示。
+function withoutIndexNodes(nodes){
+  return (nodes||[])
+    .filter(n=>n.outline?._document_role!=='scoring_index')
+    .map(n=>({...n,children:withoutIndexNodes(n.children)}))
+}
+const displayTree = computed(()=>({frontMatter:[],body:withoutIndexNodes(tocChapters.value)}))
 watch(tocChapters, () => { planningRefreshKey.value++ })
 const outlines = ref([])
 const chapters = ref([])
@@ -1360,8 +1364,6 @@ async function pollGenOutlines(taskId) {
 
 async function loadTree() {
   try {
-    const synced = await syncScoringIndex(props.projectId)
-    indexRequired.value = Boolean(synced.data.node_id)
     const { data } = await getChapterTree(props.projectId)
     tocChapters.value = data
     directoryLoaded.value = true
@@ -1947,6 +1949,11 @@ async function poll() {
     }
     if (data.stage === 'generating_outline') {
       // 目录已自动落库（v0.2 取消确认环节），切到 DB 驱动视图（含节点 id）
+      await loadTree()
+    }
+    if (data.stage === 'failed') {
+      // 失败时 DB 里的旧目录并未被替换，但 partial 预览已经顶掉了 tocChapters。
+      // 预览节点没有 id/status，留着会让“待写章节”统计为 0、正文入口被锁死。
       await loadTree()
     }
     if (data.stage === 'writing') {

@@ -8,6 +8,9 @@ DATA_CHART = re.compile(r'数据.*(?:对比图|分析图)|准确性.*(?:图表|�
 SPATIAL_LAYOUT = 'spatial_layout'
 PHYSICAL_SCENE = 'physical_scene'
 _SPATIAL_STRUCTURES = {'spatial_scene', PHYSICAL_SCENE, SPATIAL_LAYOUT}
+#: 用户对单张图的明确表达方式选择。写入思路的 image_needs 后优先于 data_structure
+#: 的自动分类（例如流程图默认 Mermaid，但用户明确要求画成 AI 图示）。
+REPRESENTATIONS = {'material', 'table', 'gantt', 'mermaid', 'illustration'}
 
 
 def spatial_style(need):
@@ -48,7 +51,10 @@ def legacy_tabular(need):
 
 
 def representation(need):
-    """优先使用内容结构；名称规则仅兼容尚未重新生成思路的旧记录。"""
+    """优先使用用户对单张图的明确选择，其次内容结构；名称规则仅兼容旧记录。"""
+    explicit = need.get('representation')
+    if explicit in REPRESENTATIONS:
+        return explicit
     if need.get('content_origin') == 'external_evidence':
         return 'material'
     structure = need.get('data_structure')
@@ -74,6 +80,7 @@ def normalize_outline(outline: dict, assets=()) -> dict:
         need['name'] = str(need['name']).strip()
         # 必须真实提供的材料，不可被名称中的“流程/表”等词降级成合成材料。
         real_table = re.search(r'截图|扫描|原件|证照|证书|实测|签字|盖章|客户提供|采购人提供|真实材料|现有材料', need['name']+' '+str(need.get('purpose') or ''))
+        explicit = need.get('representation')
         mode = representation(need)
         if mode == 'material' or real_table:
             need.update(source='material',allow_generated=False)
@@ -84,9 +91,14 @@ def normalize_outline(outline: dict, assets=()) -> dict:
         elif mode in {'gantt','mermaid'}:
             need.update(source='mermaid',allow_generated=False,prompt='',diagram_type=mode)
         elif mode == 'illustration':
+            # 用户明确指定画成 AI 图示时，不再按“流程图默认 Mermaid”的自动分类处理。
             # 空间示意保留历史优先/允许生成设置，不被图名中的关系词改变。
             # 分类来自规划阶段对“信息载体”的判断：信息靠图示符号承载的必须用平面示意。
-            if need.get('data_structure') == SPATIAL_LAYOUT:
+            if explicit == 'illustration':
+                need.update(source='illustration', allow_generated=True,
+                            visual_style=need.get('visual_style') or 'spatial_illustration')
+                need.pop('asset_id', None)
+            elif need.get('data_structure') == SPATIAL_LAYOUT:
                 need['visual_style'] = 'spatial_illustration'
             elif need.get('data_structure') == PHYSICAL_SCENE and not need.get('visual_style'):
                 need['visual_style'] = 'photorealistic'

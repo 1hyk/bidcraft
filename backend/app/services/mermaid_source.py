@@ -1,10 +1,39 @@
 """修复已声明的时序图参与者 ID 与 Mermaid 保留词 link 的冲突，不改图中文字。"""
 import html
 import re
+from datetime import datetime, timedelta
+
+#: 时间制甘特图里的“纯小时偏移”写法：`任务 :0, 2h`。Mermaid 需要完整时间戳，
+#: 否则整张图解析失败；这里只补参考日期，不改任务名、相对起点和工期。
+_GANTT_HOUR_OFFSET = re.compile(
+    # 任务名里不含冒号：这样只认第一个冒号（任务分隔符），已经带完整日期的
+    # `:2000-01-01 00:15, 1d` 不会再被二次换算。
+    r'^(?P<label>\s*[^:\n]+?)\s*:\s*(?:(?:active|crit|done|milestone)\s*,\s*)?'
+    r'(?P<start>\d+(?:\.\d+)?)\s*,\s*(?P<dur>\d+(?:\.\d+)?[hdm])\s*$'
+)
+
+
+def _normalize_gantt_time_offsets(source: str) -> str:
+    if not re.search(r'^\s*dateFormat\s+[^\n]*\b(?:HH|mm)\b', source, re.M):
+        return source
+    reference = datetime(2000, 1, 1)
+    lines = []
+    for line in source.splitlines():
+        match = _GANTT_HOUR_OFFSET.match(line)
+        if match:
+            stamp = (reference + timedelta(hours=float(match['start']))).strftime('%Y-%m-%d %H:%M')
+            line = f"{match['label']} :{stamp}, {match['dur']}"
+        lines.append(line)
+    out = '\n'.join(lines)
+    if source.endswith('\n'):
+        out += '\n'
+    return out
 
 
 def normalize(source: str) -> str:
     if re.match(r'^\s*gantt\b',source):
+        # Mermaid 不接受 `:0, 2h` 这类纯偏移；先补参考日期，再处理里程碑引用。
+        source = _normalize_gantt_time_offsets(source)
         # 已声明任务被用作里程碑起点时，补齐明确的 after 引用；不改日期或工期。
         ids=set(re.findall(r':\s*(?:active\s*,\s*|crit\s*,\s*|done\s*,\s*)*([A-Za-z_]\w*)\s*,',source))
         def milestone(match):
@@ -265,11 +294,74 @@ def normalize_body(body: str) -> str:
         return out
     body = re.sub(r'(```mermaid[^\n]*\n)(.*?)(```)',
                   replace, body, flags=re.S)
-    return _relocate_md_captions(body)
+    return _relocate_orphan_md_captions(_relocate_md_captions(body))
+
+
+def _relocate_orphan_md_captions(body: str) -> str:
+    """图名离图太远（常见于全章末尾）时收回最近的图后；无图可归则删除。
+
+    2026-10-27 项目 37《应急保障与故障处置预案》实测：Mermaid 图在章中，
+    “图：故障分级响应与应急处置闭环流程图”孤零零落在全章最后，正文没有第二张图。
+    原来的 `_relocate_md_captions` 只看图前后紧邻的行，管不到这种远距离图名。
+    """
+    lines = body.splitlines()
+    groups = _md_groups(lines)
+    if not groups:
+        # 全章一张图都没有：单独的“图：……”只会让读者以为漏图，直接删掉。
+        # 正文若用 Markdown 图片语法插了图，图名可能本来就属于它，保持原样。
+        if re.search(r'!\[[^\]]*\]\([^)]+\)', body):
+            return body
+        kept = [line for line in lines if not _md_caption_text(line)]
+        if len(kept) == len(lines):
+            return body
+        out = '\n'.join(kept)
+        if body.endswith('\n'):
+            out += '\n'
+        return out
+    attached = set()
+    has_after = []
+    for group in groups:
+        first, last = group[0][0], group[-1][1]
+        attached.update(_caption_indices_before(
+            lines, first, skip_split_label=len(group) > 1))
+        after = _caption_indices_after(lines, last)
+        attached.update(after)
+        has_after.append(bool(after))
+    orphans = [i for i, line in enumerate(lines)
+               if _md_caption_text(line) and i not in attached]
+    if not orphans:
+        return body
+    edits = []
+    for index in orphans:
+        target = next((gi for gi in range(len(groups) - 1, -1, -1)
+                       if groups[gi][-1][1] < index and not has_after[gi]), None)
+        if target is None:
+            # 前面没有可归属的图，留着只会让读者以为这里漏了一张图。
+            edits.append((index, index + 1, []))
+            continue
+        has_after[target] = True
+        at = groups[target][-1][1] + 1
+        replacement = [_clean_caption(lines[index])]
+        if at < len(lines) and lines[at].strip():
+            replacement.append('')
+        edits.append((index, index + 1, []))
+        edits.append((at, at, replacement))
+    for start, end, replacement in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
+        lines[start:end] = replacement
+    out = '\n'.join(lines)
+    if body.endswith('\n'):
+        out += '\n'
+    return out
 
 
 _HTML_MERMAID_RE = re.compile(r'<div\b([^>]*?)\bdata-code="([^"]*)"([^>]*)></div>')
 _HTML_MERMAID_DIV_RE = re.compile(r'<div\b[^>]*\bdata-code="[^"]*"[^>]*></div>', re.I)
+# Markdown 围栏经 python-markdown 转换后的形态：<pre><code class="language-mermaid">。
+# 它同样是图块；不把这种图算进来，无图判断会把它后面的合法图名误删。
+_HTML_MERMAID_PRE_RE = re.compile(
+    r'<pre\b[^>]*>\s*<code\b[^>]*class="[^"]*\blanguage-mermaid\b[^"]*"[^>]*>[\s\S]*?</code>\s*</pre>',
+    re.I,
+)
 _HTML_ELEMENT_FULL = re.compile(
     r'<h([1-6])\b[^>]*>([\s\S]*?)</h\1>\s*$|'
     r'<p\b([^>]*)>([\s\S]*?)</p>\s*$', re.I)
@@ -385,7 +477,95 @@ def normalize_html_body(body: str) -> str:
         if kept:
             out += ''.join(f'<p>{caption}</p>' for caption in kept)
         return out
-    return _relocate_html_captions(_HTML_MERMAID_RE.sub(replace, body))
+    return _relocate_orphan_html_captions(
+        _relocate_html_captions(_HTML_MERMAID_RE.sub(replace, body)))
+
+
+_HTML_IMG_RE = re.compile(r'<img\b[^>]*>', re.I)
+
+
+def _following_html_caption(body: str, end: int):
+    """图块后面第一个非空元素是图名时返回 (start,end,text)。
+
+    图片常包在 `<p><img></p>` 里，图与图名之间会隔着 `</p>`；跳过闭合标签再匹配，
+    否则合法的图片图名会被误判成孤儿。
+    """
+    offset = end
+    while offset < len(body):
+        if body[offset].isspace():
+            offset += 1
+            continue
+        closing = next((tag for tag in ('</p>', '</div>', '</figure>')
+                        if body.startswith(tag, offset)), None)
+        if closing:
+            offset += len(closing)
+            continue
+        break
+    for regex in (_HTML_POST_P_RE, _HTML_POST_H_RE):
+        match = regex.match(body, offset)
+        if not match:
+            continue
+        text = _html_caption_text(match.group(2))
+        if not text and 'data-figure-caption' in match.group(0):
+            text = _html_text(match.group(2))
+        return (match.start(), match.end(), text) if text else None
+    return None
+
+
+def _relocate_orphan_html_captions(body: str) -> str:
+    """HTML 图名离图太远时收回最近的 Mermaid 图后；无图可归则删除。
+
+    只把图名归给 Mermaid 图块；普通图片的图名保持原位（无法可靠判断其容器边界）。
+    """
+    mermaids = ([(m.start(), m.end()) for m in _HTML_MERMAID_DIV_RE.finditer(body)]
+                + [(m.start(), m.end()) for m in _HTML_MERMAID_PRE_RE.finditer(body)])
+    mermaids.sort()
+    pictures = [(m.start(), m.end()) for m in _HTML_IMG_RE.finditer(body)]
+    figures = sorted(mermaids + pictures)
+    captions = []
+    for match in _HTML_POST_P_RE.finditer(body):
+        text = _html_caption_text(match.group(2))
+        if not text and 'data-figure-caption' in match.group(1):
+            text = _html_text(match.group(2))
+        if text:
+            captions.append((match.start(), match.end(), text))
+    if not captions:
+        return body
+    if not figures:
+        # 全章一张图都没有：孤立的图名只会让读者以为漏图。
+        for start, end, _ in reversed(captions):
+            body = body[:start] + body[end:]
+        return body
+    attached, captioned = set(), set()
+    for start, end in figures:
+        post = _following_html_caption(body, end)
+        if post:
+            attached.add((post[0], post[1]))
+            captioned.add((start, end))
+    edits = []
+    for start, end, text in captions:
+        if (start, end) in attached:
+            continue
+        # 最近的图是普通图片时，图名可能本来就属于它；不移动、也不删除。
+        previous = [i for i, (f_start, f_end) in enumerate(figures) if f_end <= start]
+        if previous and figures[previous[-1]] in pictures:
+            continue
+        target = next((i for i in range(len(mermaids) - 1, -1, -1)
+                       if mermaids[i][1] <= start and mermaids[i] not in captioned), None)
+        if target is None and not pictures:
+            # 全章没有可归属的图，留着会让读者以为这里漏了一张图。
+            edits.append((start, end, ''))
+            continue
+        if target is None:
+            continue
+        captioned.add(mermaids[target])
+        insert_at = mermaids[target][1]
+        edits.append((insert_at, insert_at,
+                      _FIGURE_CAPTION_P.format(html.escape(text, quote=False))))
+        edits.append((start, end, ''))
+    for start, end, replacement in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
+        body = body[:start] + replacement + body[end:]
+    return body
 
 
 def normalize_payload_body(body: str, fmt: str = 'md') -> str:

@@ -104,6 +104,25 @@ test('目录是独立整理模式，设置与检查互斥，关闭设置保留�
  }finally{app.close()}
 })
 
+test('目录生成失败后换回数据库目录，预览快照不能冒充“没有待写章节”',async()=>{
+ const partial={chapters:[{title:'技术方案',children:[{title:'四、技术方案和服务培训',children:[]}]}]}
+ const tree=[{id:1,title:'技术方案',status:'thought_ready',children:[
+  {id:2,title:'四、技术方案和服务培训',status:'thought_ready',children:[]},
+ ]}]
+ const app=await mountWorkspace({
+  compileStatus:async()=>({data:{stage:'failed',progress:2,total:2,error:'LLM 返回为空',partial,result:null}}),
+  getChapterTree:async()=>({data:tree}),
+  syncScoringIndex:async()=>({data:{}}),
+ })
+ try{
+  app.state.tocChapters=partial.chapters
+  assert.equal(app.state.pendingWritingCount,0)
+  await app.state.poll()
+  assert.equal(app.state.tocChapters[0].status,'thought_ready')
+  assert.equal(app.state.pendingWritingCount,2)
+ }finally{app.close()}
+})
+
 test('离开思路编辑时保存思路，失败则保留原模式和草稿',async()=>{
  const app=await mountWorkspace({putNodeOutline:async()=>{throw Error('offline')}})
  try{

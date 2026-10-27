@@ -159,8 +159,8 @@ def export_project_docx(
     # 目录独占一节：封面与目录不带页眉页脚
     doc.add_section(WD_SECTION.NEW_PAGE)
     _add_toc(doc, style)
-    # 索引来自编辑器正式内容，禁止导出时再秘密追加第二份自动表。
-    _render_editor_indexes(doc, style, tree, contents)
+    # 评分索引节点已停用（2026-10-27）：历史项目里残留的 scoring_index 节点
+    # 不再导出前置索引表；正文遍历也会跳过它们（见 _walk_nodes）。
 
     # 正文节：页眉项目名 + 页脚页码，页码从 1 重新起算（目录不占正文页码）
     body = doc.add_section(WD_SECTION.NEW_PAGE)
@@ -329,24 +329,6 @@ def _add_cover(doc, style: DocxStyle, project_name: str) -> None:
           style.table_size_pt, style.body_font, color=GRAY)
 
 
-def _render_editor_indexes(doc, style, tree, contents):
-    from app.services.scoring_index import is_index
-    from app.core.generation_scope import node_ids
-    allowed = node_ids(tree)
-    def walk(nodes):
-        for node in nodes:
-            if is_index(node):
-                p = _para(doc, style)
-                _font(p.add_run(node['title']), style.body_size_pt, style.body_font, bold=True)
-                body = _normalize_body(contents.get(node['id']))
-                def validate_reference(match):
-                    return match[0] if int(match[1]) in allowed else '[章节引用失效，请重新关联]'
-                body = re.sub(r'<span[^>]*data-page-reference="(\d+)"[^>]*>.*?</span>', validate_reference, body, flags=re.S)
-                _render_html(doc, style, body)
-            walk(node.get('children') or [])
-    walk(tree)
-
-
 def _add_toc(doc, style: DocxStyle) -> None:
     p = _para(doc, style, align=WD_ALIGN_PARAGRAPH.CENTER)
     size, ea, bold = style.head_specs[0][:3]
@@ -458,6 +440,9 @@ def _normalize_body(payload: dict | None) -> str:
     body = (payload.get("body") or "").strip()
     if not body:
         return ""
+    from app.services.customer_voice import strip_internal_notes
+    # 导出前最后一道保险：历史正文或手工编辑里残留的内部审阅提示，不能进成稿。
+    body = strip_internal_notes(body)
     fmt = (payload.get("format") or "html").lower()
     # 与前端 markdownToHtml 的自动识别保持一致：标了 md 但内容已是 HTML 的（历史数据）按 HTML 处理
     if fmt == "md" and not body.startswith("<"):

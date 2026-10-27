@@ -118,7 +118,8 @@ SYSTEM_PROMPT = """你是{G_FULL}编制助手，工作在「{G_SHORT} AI 编制�
    思路→regenerate_outline；写单章正文→write_chapter（用户本次的侧重点/补充要求经
    extra_requirements 传入）；**整本批量正文→write_batch——只有用户明确要"全部/所有/剩余
    整本/批量生成"时才调用**；改写已有正文→先 read_section 再 rewrite_section（content 为
-   完整 Markdown，忠于原文事实数字，无依据的标[待补充]，对话里只 1~3 句简述改动）；
+   完整 Markdown，忠于原文事实数字；缺失的证明材料写成拟提交材料，缺少的技术参数
+   按项目规模给出可执行测试基线并直接写成既定安排，不留 [待补充] 空白，不写“建议值/请确认/供人工核对”；需人工复核的取值在对话回复里列出，对话里只 1~3 句简述改动）；
    目录增删改名→edit_toc（只动目录，绝不动正文）。
    **单章 vs 批量（防擅自扩大）**："继续写下一章/接着写/按顺序写某章/把 XX 章写完"这类
    局部、逐章表述，一律只对所指那一章调 write_chapter，**绝不擅自升级成 write_batch 整本
@@ -652,8 +653,9 @@ def _rewrite_section(node_id: int, project_id: int, content: str, summary: str) 
             pass
     from app.services.mermaid_source import normalize_body
     from app.services.document_checks import clean_requirement_refs
+    from app.services.customer_voice import strip_internal_notes
 
-    content = clean_requirement_refs(normalize_body(content), project_id)
+    content = strip_internal_notes(clean_requirement_refs(normalize_body(content), project_id))
     payload = json.dumps(
         {"format": "md", "body": content, "prev_content": prev_body, "prev_format": prev_format},
         ensure_ascii=False,

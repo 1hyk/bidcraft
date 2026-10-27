@@ -42,41 +42,11 @@ def editable_html(entries):
 
 
 def ensure_editor_index(project_id):
-    """显式同步接口调用；只新建一次，绝不重写用户已有内容。"""
-    from app.core.database import get_conn
-    from app.services.section_service import get_tree
-    entries = project_index(project_id)
-    tree = get_tree(project_id)
-    if not entries or not tree:
-        return {'created': False}
-    conn = get_conn()
-    conn.begin()
-    try:
-        with conn.cursor() as cur:
-            cur.execute('SELECT id FROM project WHERE id=%s FOR UPDATE', (project_id,))
-            if not cur.fetchone(): raise ValueError('项目不存在')
-            cur.execute('SELECT id,outline FROM chapter_node WHERE project_id=%s', (project_id,))
-            existing = next((n for n in cur.fetchall() if is_index(n)), None)
-            if existing:
-                conn.commit()
-                return {'created': False, 'node_id': existing['id']}
-            # 放入已展示的编制子树，导出时作为前置索引单独输出，不参与正文编号。
-            parent = tree[0]['id']
-            cur.execute('SELECT lot_id FROM chapter_node WHERE id=%s', (parent,))
-            lot_id = cur.fetchone().get('lot_id')
-            cur.execute('SELECT MIN(sort_order) AS first_order FROM chapter_node WHERE parent_id=%s', (parent,))
-            order = (cur.fetchone().get('first_order') or 0) - 1
-            outline = json.dumps({'_document_role': ROLE, 'thinking': '按招标要求核对索引，直接编辑表格；页码在导出排版后生成。'}, ensure_ascii=False)
-            cur.execute("INSERT INTO chapter_node(project_id,lot_id,parent_id,title,sort_order,status,outline) VALUES(%s,%s,%s,%s,%s,'generated',%s)",
-                        (project_id, lot_id, parent, '技术评分响应索引', order, outline))
-            nid = cur.lastrowid
-            content = json.dumps({'format': 'html', 'body': editable_html(entries)}, ensure_ascii=False)
-            cur.execute('INSERT INTO section_content(chapter_node_id,content,ai_generated) VALUES(%s,%s,0)', (nid, content))
-        conn.commit()
-        return {'created': True, 'node_id': nid}
-    except Exception:
-        conn.rollback()
-        raise
+    """评分索引节点不再自动创建（2026-10-27 确认不需要）。
+
+    接口保留为空操作，只为兼容尚未刷新的旧前端；不再读写目录树。
+    """
+    return {'created': False}
 
 
 def _text_requires_index(text):

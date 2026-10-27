@@ -11,6 +11,17 @@ from app.core.config import settings
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 3.0  # 指数退避基数（秒）
 RETRY_JITTER = 1.0      # 随机抖动 ±秒，防并发重试"惊群"
+EMPTY_RETRIES = 2       # 200 但 content 为空时的重试次数（中转站偶发，见 chat()）
+
+
+def _message_text(message: dict) -> str:
+    """取 assistant 文本。少数兼容端点返回分段 content（list），这里拼成字符串。"""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "".join(
+            p.get("text") or "" for p in content if isinstance(p, dict)
+        )
+    return content or ""
 
 
 def _client(timeout: float = 300.0) -> httpx.Client:
@@ -102,8 +113,23 @@ class LLMClient:
         payload.update(self._thinking_payload(enable_thinking))
         if max_tokens:
             payload["max_tokens"] = max_tokens
-        resp = self._post_with_retry(payload, timeout)
-        return resp.json()["choices"][0]["message"]["content"]
+        # 中转站偶发 200 + 空 content（2026-10-27 项目 36 目录生成实测：一次请求
+        # 等了约 6 分钟后返回空串，直接让整步编制失败）。空回复重试成本低，值得内置，
+        # 否则每个调用方都得自己兜。注意工具调用场景的空 content 是正常的，
+        # chat_with_tools 不经过这里。
+        text = ""
+        for attempt in range(EMPTY_RETRIES + 1):
+            resp = self._post_with_retry(payload, timeout)
+            data = resp.json()
+            choice = (data.get("choices") or [{}])[0]
+            text = _message_text(choice.get("message") or {})
+            if text.strip():
+                return text
+            print(f"[LLM] 空回复（{attempt + 1}/{EMPTY_RETRIES + 1}）："
+                  f"finish_reason={choice.get('finish_reason')!r} usage={data.get('usage')}")
+            if attempt < EMPTY_RETRIES:
+                time.sleep(1.5 * (attempt + 1))
+        return text
 
     def embed(self, texts: list[str], timeout: float = 120.0) -> list[list[float]]:
         raise NotImplementedError("本项目已移除向量库，无需文本向量化")

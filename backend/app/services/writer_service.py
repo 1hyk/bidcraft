@@ -13,7 +13,7 @@
 """
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.agents.writer_agent import write_chapter, write_chapter_stream
 from app.core.database import close_thread_conn, query, query_one, execute
@@ -173,7 +173,8 @@ def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
     from app.services.evidence_roles import flag_unverified_conclusions, flag_capability_claims
     from app.services.template_completion import complete as complete_templates, has_named_table
 
-    body = flag_capability_claims(flag_unverified_conclusions(normalize_body(body)))
+    from app.services.customer_voice import strip_internal_notes
+    body = strip_internal_notes(flag_capability_claims(flag_unverified_conclusions(normalize_body(body))))
     role = (ctx.get("outline") or {}).get("_writing_role")
     if role == 'scope_introduction':
         from app.core.page_plan import count_words
@@ -648,8 +649,12 @@ def start_batch(project_id: int) -> dict:
         failures = []
         try:
             with ThreadPoolExecutor(max_workers=BATCH_CONCURRENCY) as pool:
-                futures = [(n, pool.submit(_write, n)) for n in nodes]
-                for node, fut in futures:
+                # 必须按**完成顺序**收结果：按提交顺序 fut.result() 时，前面某一章写得慢
+                # 会把进度条卡住，后面早写完的章节不计数（2026-10-27 项目 37 实测
+                # 30/33 已写完、界面仍停在 5/33）。
+                futures = {pool.submit(_write, n): n for n in nodes}
+                for fut in as_completed(futures):
+                    node = futures[fut]
                     try:
                         if fut.result():
                             done += 1

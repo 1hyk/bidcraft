@@ -72,7 +72,7 @@ _THEME_VARIABLES = json.loads((PROJECT_ROOT/'frontend/src/mermaidTheme.json').re
 
 #: 图内字体。必须写死：不写就跟随 Chrome 默认，中文字宽一变几何全变，
 #: 而且不同机器出的图尺寸不一致，缓存就失去意义。
-_FONT = "Microsoft YaHei, 微软雅黑, SimSun, sans-serif"
+_FONT = "Microsoft YaHei, 微软雅黑, Noto Sans CJK SC, SimSun, sans-serif"
 
 #: 单批的超时。
 _TIMEOUT = 180
@@ -87,6 +87,11 @@ _CHROME_CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    # Linux 服务器常见安装位置；`shutil.which` 也覆盖 PATH 里的命令。
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
 ]
 
 #: 页面模板。**失败信号就是"那一格是空白的"**：截图按分隔带切开后逐格裁白边，
@@ -156,7 +161,8 @@ def chrome() -> str | None:
                 _chrome_path = c
                 break
         else:
-            for name in ("chrome", "msedge", "chromium"):
+            for name in ("google-chrome", "google-chrome-stable", "chrome", "msedge",
+                         "chromium", "chromium-browser"):
                 found = shutil.which(name)
                 if found:
                     _chrome_path = found
@@ -280,6 +286,10 @@ def _screenshot_and_split(chunk: list[str]) -> list[bytes | None] | None:
             f"--screenshot={png.as_posix()}",
             html.as_uri(),
         ]
+        # Linux 以 root 运行（systemd 默认）时 Chrome 强制要求该开关；页面只加载
+        # 本机 file:// 的 mermaid.min.js，不访问外部内容。非 root 不加，保持沙箱。
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            cmd.insert(1, "--no-sandbox")
         subprocess.run(cmd, timeout=_TIMEOUT, capture_output=True, check=False)
         if not png.is_file():
             return [None] * len(chunk)

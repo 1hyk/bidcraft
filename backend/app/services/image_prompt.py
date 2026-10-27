@@ -51,10 +51,18 @@ def build_prompt(need, model):
     budget=1200 if str(model).startswith('qwen-image-2.0') else 700
     feedback=str(need.get('_feedback') or '').strip()
     style=visual_style(need)
-    appearance=('Photorealistic proposed physical scene. One coherent camera perspective, realistic scale, materials and lighting. No collage, cutaway, cartoon or floating equipment. No schematic overlays: no dashed or connector lines, arrows, callouts, labels, measurement marks, highlight rings, translucent coverage cones or floating icons; show relations only through real objects and their placement. ' if style=='photorealistic' else 'Technical spatial illustration with coherent scale and perspective. ')
-    head=(appearance+'AI-generated visualization, not documentary evidence. No text, letters, numbers, logos or captions. '
-          'Plain unmarked vehicles, equipment and barriers; blank sign faces. '
-          'Clear spatial layout, horizontal composition. Not real evidence.\n')
+    # 流程图/结构图节点必须靠标签识字；只有明确 allow_text 的非写实图才放开文字，
+    # 写实场景仍按“无字实物”处理，避免把示意图文字混进现场画面。
+    allow_text=bool(need.get('allow_text')) and style!='photorealistic'
+    appearance=('Photorealistic proposed physical scene. One coherent camera perspective, realistic scale, materials and lighting. No collage, cutaway, cartoon or floating equipment. No schematic overlays: no dashed or connector lines, arrows, callouts, labels, measurement marks, highlight rings, translucent coverage cones or floating icons; show relations only through real objects and their placement. ' if style=='photorealistic' else
+                ('Technical process diagram illustration with a clean, consistent layout. ' if allow_text else
+                 'Technical spatial illustration with coherent scale and perspective. '))
+    if allow_text:
+        head=(appearance+'AI-generated diagram, not documentary evidence. Use only the short Chinese node labels listed in the description; every label must be clear, correctly spelled and attached to its node. Do not add any other text, numbers, logos, captions or watermarks. Not real evidence.\n')
+    else:
+        head=(appearance+'AI-generated visualization, not documentary evidence. No text, letters, numbers, logos or captions. '
+              'Plain unmarked vehicles, equipment and barriers; blank sign faces. '
+              'Clear spatial layout, horizontal composition. Not real evidence.\n')
     priority=('Requested changes: '+feedback+'\n') if feedback else ''
     subject='Subject: '+str(need.get('name') or '')+'\n'
     if len((head+priority+subject).encode('utf-8'))>budget:
@@ -83,10 +91,16 @@ def build_prompt(need, model):
         # 旧提示常把“示意图”写成“严禁虚线/箭头/网格”，这会把分区和航线一起禁掉。
         background=re.sub(r'(?:严禁|禁止|不要|不得)(?:出现|画|绘制)?[^，,。；;\n]*'
                           r'(?:虚线|箭头|轨迹|网格|覆盖层|标注|发光|连线)[^，,。；;\n]*','',background)
-    # 对象保留，只将会诱导画文字的表面要求改为无字表面；不删除整句场景。
-    background=re.sub(r'(?:带有|带|印有|印着|写有|写着|标有)(?:清晰的|醒目的|明显的)?(?:中文|文字|字样|标识|标志|标签|编号|品牌标识|品牌Logo)(?:的)?', '无文字标识的', background, flags=re.I)
-    # 只删除独立的标签绘制指令；不再删除包含这些词的整个场景句。
-    background=re.sub(r'(?:^|(?<=[，,。；\n]))\s*(?:请)?(?:标注|添加文字|添加标签|写上|绘制标题)[^，,。；\n]*','',background)
+    if allow_text:
+        # 放开标签的图，要清掉旧提示里“不要文字”的反向要求，否则提示词自相矛盾。
+        background=re.sub(r'(?:不|不要|不得|禁止|严禁)(?:使用|出现|添加|画|绘制|写)?'
+                          r'[^，,。；;\n]*(?:文字|字母|数字|标签|图内文字|水印)[^，,。；;\n]*','',background)
+        background += '。节点标签只使用说明中列出的中文名称，顺序不得调换；标签清晰可读，不额外增加图题、编号或说明文字。'
+    else:
+        # 对象保留，只将会诱导画文字的表面要求改为无字表面；不删除整句场景。
+        background=re.sub(r'(?:带有|带|印有|印着|写有|写着|标有)(?:清晰的|醒目的|明显的)?(?:中文|文字|字样|标识|标志|标签|编号|品牌标识|品牌Logo)(?:的)?', '无文字标识的', background, flags=re.I)
+        # 只删除独立的标签绘制指令；不再删除包含这些词的整个场景句。
+        background=re.sub(r'(?:^|(?<=[，,。；\n]))\s*(?:请)?(?:标注|添加文字|添加标签|写上|绘制标题)[^，,。；\n]*','',background)
     background=re.sub(r'[‘“’”]','',background)
     # 清理删除短语后留下的连续标点。
     background=re.sub(r'([，,。；;])\s*[，,。；;]+', r'\1', background)

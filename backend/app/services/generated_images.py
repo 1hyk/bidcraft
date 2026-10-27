@@ -159,21 +159,33 @@ def validate_visual(path: Path, need: dict) -> None:
         buf = io.BytesIO()
         im.save(buf, format='JPEG', quality=90)
     style = visual_style(need)
+    allow_text = bool(need.get('allow_text')) and style != 'photorealistic'
+    if allow_text:
+        check = ('核查这张AI生成的流程图/示意图是否符合需求。节点上的中文标签是必要内容：'
+                 '检查标签是否清晰可读、无乱码和错别字，是否与需求中的步骤名称对应，流程顺序和箭头方向是否符合需求；'
+                 '不要因为画面存在文字就判失败。同时检查有无无关文字、字母编号、图题或水印。'
+                 '画面风格必须符合：' + style + '。只输出JSON：'
+                 '{"relevant":true,"has_text":true,"style_matches":true,"physical_plausible":true,"has_schematic_overlay":false,"reason":""}。需求：')
+    else:
+        check = ('核查这张AI生成场景是否符合需求。不接受仅色调相似；检查透视、比例、物体结构、摆放与空间关系，拒绝拼贴、不合理悬浮或设备变形。'
+                 '画面风格必须符合：' + style + '。'
+                 '若为 photorealistic，还要检查有无图解叠加：虚线、箭头、引线、圈注、测量线、半透明覆盖扇区、'
+                 '悬浮图标，或只为表示关系而画的连线/光束，有则 has_schematic_overlay=true。'
+                 '同时检查有无任何可见文字、乱码、字母标签或水印。只输出JSON：'
+                 '{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"has_schematic_overlay":false,"reason":""}。需求：')
     result = extract_json(llm.chat([{'role':'user','content':[
-        {'type':'text','text':'核查这张AI生成场景是否符合需求。不接受仅色调相似；检查透视、比例、物体结构、摆放与空间关系，拒绝拼贴、不合理悬浮或设备变形。'
-         '画面风格必须符合：'+style+'。'
-         '若为 photorealistic，还要检查有无图解叠加：虚线、箭头、引线、圈注、测量线、半透明覆盖扇区、'
-         '悬浮图标，或只为表示关系而画的连线/光束，有则 has_schematic_overlay=true。'
-         '同时检查有无任何可见文字、乱码、字母标签或水印。只输出JSON：'
-         '{"relevant":true,"has_text":false,"style_matches":true,"physical_plausible":true,"has_schematic_overlay":false,"reason":""}。需求：'
+        {'type':'text','text': check
          +str(need.get('name') or '')+'；'+str(need.get('purpose') or '')},
         {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+
          base64.b64encode(buf.getvalue()).decode()}}]}], model=settings.vision_model,
          temperature=0, max_tokens=500, timeout=60))
     # 图解叠加只对写实图是缺陷；示意图本来就该有分区色块、边界和航线线条。
     overlay_bad = style == 'photorealistic' and result.get('has_schematic_overlay') is not False
-    if (result.get('relevant') is not True or result.get('has_text') is not False
-            or result.get('style_matches') is not True or result.get('physical_plausible') is not True
+    text_bad = result.get('has_text') is not False and not allow_text
+    # 流程图不是实物场景，不适用“实物合理性”；写实和其他空间示意图仍然检查。
+    physical_bad = not allow_text and result.get('physical_plausible') is not True
+    if (result.get('relevant') is not True or text_bad
+            or result.get('style_matches') is not True or physical_bad
             or overlay_bad):
         raise ImageGenerationError('生成图未通过主题、文字、风格、图解叠加或实物合理性核验：'+str(result.get('reason') or '需重新检查')[:150])
 
@@ -294,7 +306,7 @@ def _record(project_id,node_id,path,caption,need,prompt,validated,reason,substit
               "caption": caption + "（AI生成示意）", "kind": "illustration", "generated": True,
               "url": "/uploads/" + path.relative_to(settings.uploads_dir).as_posix(),
               "content": str(need.get("purpose") or "概念示意插图"),
-              "generation_need": {k:need.get(k) for k in ('name','purpose','prompt','source','_feedback','content_origin','data_structure','visual_style','_edit_source_asset_id')},
+              "generation_need": {k:need.get(k) for k in ('name','purpose','prompt','source','_feedback','content_origin','data_structure','visual_style','allow_text','_edit_source_asset_id')},
               "source_title": "AI生成示意图", "page_id": 0, "doc_id": None,
               "model": settings.image_generation_model, "prompt": prompt}
 
@@ -305,6 +317,9 @@ def build_edit_prompt(need):
         raise ValueError('请说明希望修改当前图的哪个部分')
     if visual_style(need) == 'photorealistic':
         style_rule = '写实画面不要添加虚线、箭头、引线、圈注、覆盖扇区或发光连线等图解叠加。'
+    elif need.get('allow_text'):
+        style_rule = ('这是带标签的流程图/示意图：保留已有节点文字、箭头顺序和连线关系，'
+                      '只按修改意见调整，不新增无关文字、图题或水印。')
     else:
         style_rule = ('这是空间示意图：保留并按要求调整分区色块、边界、航线/航路线条和点位等图解元素，'
                       '线条清晰、层次简洁，不画图内文字。')

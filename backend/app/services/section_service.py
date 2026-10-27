@@ -180,8 +180,9 @@ def persist_one(project_id: int, node_id: int, body_md: str, used: dict | None =
     """
     from app.services.mermaid_source import normalize_body
     from app.services.document_checks import clean_requirement_refs
+    from app.services.customer_voice import strip_internal_notes
 
-    body_md = clean_requirement_refs(normalize_body(body_md), project_id)
+    body_md = strip_internal_notes(clean_requirement_refs(normalize_body(body_md), project_id))
     if used and used.get("images"):
         from app.services.image_retrieval import bind_references, selected_ids
 
