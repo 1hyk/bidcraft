@@ -143,6 +143,39 @@ _CLEANUP = (
     ("用例用例", "用例"),
 )
 
+# 引用采购文件条款标题时必须忠实原文：附件1“2.2 验收交付物”不能被改成
+# “2.2 验收成果”，否则采购人按编号找不到对应条款。只保护带条款号/附件号的引文，
+# 不保护正文里自己承诺的“交付物”。
+_DOC_QUOTE = re.compile(r"附件\s*\d+[^“”\"\n]{0,10}[“\"][^”\"\n]{1,60}[”\"]")
+_CLAUSE_QUOTE = re.compile(r"[“\"]\d+(?:\.\d+)+(?:\s|、|\.)?[^”\"\n]{0,40}[”\"]")
+_TENDER_TERM_QUOTE = re.compile(
+    r"(?:附件\s*\d+|采购文件|招标文件|采购公告|磋商文件|询价文件)[^\n]{0,40}?"
+    r"[“\"]\s*验收交付物\s*[”\"]"
+)
+_ALL_QUOTES = re.compile(r"[“\"]([^”\"\n]{1,80})[”\"]")
+
+
+def _protect_quotes(text: str) -> tuple[str, dict[str, str]]:
+    store: dict[str, str] = {}
+
+    def repl(match: re.Match) -> str:
+        token = f"@@Q{len(store)}@@"
+        store[token] = match.group(0)
+        return token
+
+    def repl_citation(match: re.Match) -> str:
+        content = match.group(1)
+        if "验收交付物" in content and (re.search(r"\d+\.\d+", content) or "附件" in content):
+            return repl(match)
+        return match.group(0)
+
+    text = _ALL_QUOTES.sub(repl_citation, text)
+    text = _TENDER_TERM_QUOTE.sub(repl, text)
+    text = _DOC_QUOTE.sub(repl, text)
+    text = _CLAUSE_QUOTE.sub(repl, text)
+    return text, store
+
+
 _STRONG_BANNED = re.compile(
     r"系统测试方案|系统测试用例|系统测试执行记录|系统测试报告|验收大纲|验收报告|"
     r"测试大纲|测试方案|测试用例|测试报告|执行记录|交付物|交付文件|交付清单|"
@@ -152,6 +185,7 @@ _SOFT_BANNED = re.compile(r"文档|清单")
 
 
 def _clean(text: str) -> str:
+    text, quoted = _protect_quotes(text)
     for old, new in _SAFE:
         text = text.replace(old, new)
     for old, new in _COUNTS:
@@ -178,6 +212,8 @@ def _clean(text: str) -> str:
     text = re.sub(r"与\s*及", "及", text)
     text = re.sub(r"[（(]\s*[）)]", "", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
+    for token, original in quoted.items():
+        text = text.replace(token, original)
     return text
 
 
@@ -212,8 +248,9 @@ def sanitize_obj(obj):
 
 
 def violations(text: str) -> list[str]:
-    """返回仍存在的文件名式表述，供测试和巡检使用。"""
+    """返回仍存在的文件名式表述（采购文件条款引文除外），供测试和巡检使用。"""
     value = str(text or "")
+    value, _ = _protect_quotes(value)
     found = _STRONG_BANNED.findall(value)
     found += _SOFT_BANNED.findall(value)
     return sorted(set(found))
