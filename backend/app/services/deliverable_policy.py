@@ -60,6 +60,7 @@ _SPECIFIC = (
     ("文件清单", "资料目录"),
     ("报告模板", "结果呈现方式"),
     ("记录模板", "记录格式"),
+    ("验收交付物", "对应验收条款"),
     ("交付文件", "成果"),
     ("交付物", "成果"),
     ("正式文档", "正式成果"),
@@ -143,37 +144,24 @@ _CLEANUP = (
     ("用例用例", "用例"),
 )
 
-# 引用采购文件条款标题时必须忠实原文：附件1“2.2 验收交付物”不能被改成
-# “2.2 验收成果”，否则采购人按编号找不到对应条款。只保护带条款号/附件号的引文，
-# 不保护正文里自己承诺的“交付物”。
-_DOC_QUOTE = re.compile(r"附件\s*\d+[^“”\"\n]{0,10}[“\"][^”\"\n]{1,60}[”\"]")
-_CLAUSE_QUOTE = re.compile(r"[“\"]\d+(?:\.\d+)+(?:\s|、|\.)?[^”\"\n]{0,40}[”\"]")
-_TENDER_TERM_QUOTE = re.compile(
-    r"(?:附件\s*\d+|采购文件|招标文件|采购公告|磋商文件|询价文件)[^\n]{0,40}?"
-    r"[“\"]\s*验收交付物\s*[”\"]"
+# 引用采购文件条款时保留可定位的条款号，但不保留条款标题里的文件名：
+# 附件1“2.2 验收交付物” → 附件1第2.2条；采购人仍能按编号找到原条款。
+_CITATION_NESTED = re.compile(
+    r"[“\"]\s*(附件\s*\d+)\s+(\d+(?:\.\d+)+)[^”\"\n]{0,40}[”\"]"
 )
-_ALL_QUOTES = re.compile(r"[“\"]([^”\"\n]{1,80})[”\"]")
+_CITATION_CLAUSE = re.compile(
+    r"(附件\s*\d+)\s*[“\"]\s*(\d+(?:\.\d+)+)[^”\"\n]{0,40}[”\"]"
+)
+_CITATION_UNQUOTED = re.compile(r"(附件\s*\d+)\s+(\d+(?:\.\d+)+)\s*验收交付物")
+_CITATION_BARE = re.compile(r"[“\"]\s*(\d+(?:\.\d+)+)\s*验收交付物\s*[”\"]")
 
 
-def _protect_quotes(text: str) -> tuple[str, dict[str, str]]:
-    store: dict[str, str] = {}
-
-    def repl(match: re.Match) -> str:
-        token = f"@@Q{len(store)}@@"
-        store[token] = match.group(0)
-        return token
-
-    def repl_citation(match: re.Match) -> str:
-        content = match.group(1)
-        if "验收交付物" in content and (re.search(r"\d+\.\d+", content) or "附件" in content):
-            return repl(match)
-        return match.group(0)
-
-    text = _ALL_QUOTES.sub(repl_citation, text)
-    text = _TENDER_TERM_QUOTE.sub(repl, text)
-    text = _DOC_QUOTE.sub(repl, text)
-    text = _CLAUSE_QUOTE.sub(repl, text)
-    return text, store
+def _rewrite_citations(text: str) -> str:
+    text = _CITATION_NESTED.sub(r"\1第\2条", text)
+    text = _CITATION_CLAUSE.sub(r"\1第\2条", text)
+    text = _CITATION_UNQUOTED.sub(r"\1第\2条", text)
+    text = _CITATION_BARE.sub(r"第\1条", text)
+    return text
 
 
 _STRONG_BANNED = re.compile(
@@ -185,7 +173,7 @@ _SOFT_BANNED = re.compile(r"文档|清单")
 
 
 def _clean(text: str) -> str:
-    text, quoted = _protect_quotes(text)
+    text = _rewrite_citations(text)
     for old, new in _SAFE:
         text = text.replace(old, new)
     for old, new in _COUNTS:
@@ -212,8 +200,6 @@ def _clean(text: str) -> str:
     text = re.sub(r"与\s*及", "及", text)
     text = re.sub(r"[（(]\s*[）)]", "", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
-    for token, original in quoted.items():
-        text = text.replace(token, original)
     return text
 
 
@@ -248,9 +234,8 @@ def sanitize_obj(obj):
 
 
 def violations(text: str) -> list[str]:
-    """返回仍存在的文件名式表述（采购文件条款引文除外），供测试和巡检使用。"""
-    value = str(text or "")
-    value, _ = _protect_quotes(value)
+    """返回仍存在的文件名式表述，供测试和巡检使用。"""
+    value = _rewrite_citations(str(text or ""))
     found = _STRONG_BANNED.findall(value)
     found += _SOFT_BANNED.findall(value)
     return sorted(set(found))
