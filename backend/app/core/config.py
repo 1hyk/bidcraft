@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     # debug_context 事件随 SSE 返回，前端 console.log（排查"生成与预期差距大"用）
     gen_debug_context: bool = False
 
+    # ---------- 公司口径 ----------
+    # 交付与验收流程照常写，但正文、提纲、目录不出现具体交付文件名称、份数和清单。
+    # 生成/改写/落库/导出统一清洗；设为 false 可恢复上游行为。
+    bidcraft_hide_deliverable_files: bool = True
+
     # ---------- 本地存储 ----------
     uploads_dir: Path = PROJECT_ROOT / "uploads"
 

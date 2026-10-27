@@ -441,8 +441,9 @@ def _normalize_body(payload: dict | None) -> str:
     if not body:
         return ""
     from app.services.customer_voice import strip_internal_notes
-    # 导出前最后一道保险：历史正文或手工编辑里残留的内部审阅提示，不能进成稿。
-    body = strip_internal_notes(body)
+    from app.services.deliverable_policy import sanitize_text
+    # 导出前最后一道保险：历史正文或手工编辑里残留的内部审阅提示和交付文件名，不能进成稿。
+    body = sanitize_text(strip_internal_notes(body))
     fmt = (payload.get("format") or "html").lower()
     # 与前端 markdownToHtml 的自动识别保持一致：标了 md 但内容已是 HTML 的（历史数据）按 HTML 处理
     if fmt == "md" and not body.startswith("<"):

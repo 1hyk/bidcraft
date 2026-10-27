@@ -13,6 +13,7 @@ import re
 
 from app.agents.json_util import extract_json
 from app.core.domains import fill_genre
+from app.services.deliverable_policy import prompt_suffix, sanitize_obj
 from app.services.llm import llm
 
 # 章级骨架**不再由本模块自带**——这里原先有两张写死的表（`SKELETON_CHAPTERS` 与
@@ -76,7 +77,7 @@ OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，�
   "need_table": true,
   "need_image": false,
   "image_needs": [{"name": "图名", "purpose": "用途", "content_origin": "proposal_design|external_evidence", "data_structure": "records|assignment|comparison|measurements|timeline|process|hierarchy|relationships|physical_scene|spatial_layout", "source": "mermaid|history|illustration|material", "asset_id": "history选中候选时填写原始asset_id，其他留空", "allow_generated": false, "visual_style": "photorealistic|spatial_illustration", "prompt": "仅合成示意图填写画面要求"}]
-}"""
+}""" + prompt_suffix()
 
 
 def _extract_json(text: str) -> dict:
@@ -96,7 +97,7 @@ TOC_TITLES_SYSTEM = """你是资深{G_INTRO}编制专家，负责拟定目录的
    不因历史材料中出现某章就新增本项目没有依据的内容；历史素材不足也不能省略本项目要求。
 4. 按当前招标明确的顺序组织，未规定顺序时按工作逻辑排列；只输出 JSON，不要解释。
 
-输出 JSON：{"chapters": [{"title": "第一章标题"}]}"""
+输出 JSON：{"chapters": [{"title": "第一章标题"}]}""" + prompt_suffix()
 
 TOC_CHILDREN_SYSTEM = """你是资深{G_FULL}编制专家。为目录中指定的某一章生成子节列表。
 
@@ -113,7 +114,7 @@ TOC_CHILDREN_SYSTEM = """你是资深{G_FULL}编制专家。为目录中指定�
    没有技术评分项时，仍须依据技术要求、工作范围、实施与验收要求展开技术内容，不得用价格评审方法替代；
 6. 只输出 JSON，不要解释。
 
-输出 JSON：{"children": [{"title": "第X节标题"}]}"""
+输出 JSON：{"children": [{"title": "第X节标题"}]}""" + prompt_suffix()
 
 
 def _toc_context(project_info: str, professions: list[str] | None,
@@ -355,4 +356,4 @@ def generate_outline(
         temperature=0.3,
     )
     from app.services.image_planning import normalize_outline
-    return normalize_outline(_extract_json(raw), assets)
+    return sanitize_obj(normalize_outline(_extract_json(raw), assets))

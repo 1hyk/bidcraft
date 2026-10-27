@@ -164,10 +164,12 @@ def save_outline(project_id: int, title: str, outline: dict) -> bool:
         node = find_node_by_title(project_id, title)
     if not node:
         return False
+    from app.services.deliverable_policy import sanitize_obj
+
     execute(
         "UPDATE chapter_node SET outline = %s,"
         " status = IF(status = 'unwritten', 'thought_ready', status) WHERE id = %s",
-        (json.dumps(outline, ensure_ascii=False), node["id"]),
+        (json.dumps(sanitize_obj(outline), ensure_ascii=False), node["id"]),
     )
     return True
 
@@ -181,8 +183,11 @@ def persist_one(project_id: int, node_id: int, body_md: str, used: dict | None =
     from app.services.mermaid_source import normalize_body
     from app.services.document_checks import clean_requirement_refs
     from app.services.customer_voice import strip_internal_notes
+    from app.services.deliverable_policy import sanitize_text
 
-    body_md = strip_internal_notes(clean_requirement_refs(normalize_body(body_md), project_id))
+    body_md = sanitize_text(
+        strip_internal_notes(clean_requirement_refs(normalize_body(body_md), project_id))
+    )
     if used and used.get("images"):
         from app.services.image_retrieval import bind_references, selected_ids
 
@@ -235,6 +240,7 @@ def persist_chapters(project_id: int, chapters: list[dict]) -> int:
 
     from app.services.mermaid_source import normalize_body
     from app.services.document_checks import clean_requirement_refs
+    from app.services.deliverable_policy import sanitize_text
 
     saved = 0
     for ch in chapters:
@@ -262,8 +268,8 @@ def persist_chapters(project_id: int, chapters: list[dict]) -> int:
             except (TypeError, ValueError):
                 pass
         content = {"format": "md",
-                   "body": clean_requirement_refs(
-                       normalize_body(ch.get("content", "")), project_id),
+                   "body": sanitize_text(clean_requirement_refs(
+                       normalize_body(ch.get("content", "")), project_id)),
                    "prev_content": prev_body, "prev_format": prev_format}
         if ex:
             execute(
@@ -351,9 +357,11 @@ def update_outline_by_id(project_id: int, node_id: int, outline: dict) -> bool:
     from app.services.scoring_index import is_index, ROLE
     if is_index(cur):
         outline = dict(outline, _document_role=ROLE)
+    from app.services.deliverable_policy import sanitize_obj
+
     execute(
         "UPDATE chapter_node SET outline = %s,"
         " status = IF(status = 'unwritten', 'thought_ready', status) WHERE id = %s",
-        (json.dumps(outline, ensure_ascii=False), node_id),
+        (json.dumps(sanitize_obj(outline), ensure_ascii=False), node_id),
     )
     return True
