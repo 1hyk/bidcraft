@@ -212,10 +212,10 @@ class RepairsTests(unittest.TestCase):
         table='|字段|内容|\n|---|---|\n|签署人|（待填写）|'
         with patch('app.services.llm.llm.chat',return_value=__import__('json').dumps({'markdown':table})) as call:
             result=template_completion.complete('[图片占位：验收签署页样例]\n[图片占位：证书原件模板扫描件]')
-        self.assertIn(table,result)
+        self.assertIn('| 签署人及职务 | （待填写） |',result)
         self.assertIn('空白模板',result)
         self.assertIn('[图片占位：证书原件模板扫描件]',result)
-        call.assert_called_once()
+        call.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

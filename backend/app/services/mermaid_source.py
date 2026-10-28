@@ -31,6 +31,20 @@ def _normalize_gantt_time_offsets(source: str) -> str:
 
 
 def normalize(source: str) -> str:
+    if re.match(r'^\s*mindmap\b', source):
+        lines=source.splitlines()
+        nodes=[i for i in range(1,len(lines)) if lines[i].strip()]
+        # 仅修正可确定的“显式根 + 全部同级叶子”非法缩进，不猜分组或重建层级。
+        if len(nodes)>1:
+            root=nodes[0]
+            indent=lambda s:len(s)-len(s.lstrip(' '))
+            if (re.match(r'^\s*root\(\(.+\)\)\s*$',lines[root])
+                    and all(indent(lines[i])==indent(lines[root]) for i in nodes[1:])
+                    and all(not re.search(r'\t|::|[\[\]{}()]|^\s*%%',lines[i]) for i in nodes[1:])):
+                lines[root]=lines[root].strip()
+                for i in nodes[1:]:lines[i]='  '+lines[i].strip()
+                return '\n'.join(lines)+ ('\n' if source.endswith('\n') else '')
+        return source
     if re.match(r'^\s*gantt\b',source):
         # Mermaid 不接受 `:0, 2h` 这类纯偏移；先补参考日期，再处理里程碑引用。
         source = _normalize_gantt_time_offsets(source)

@@ -1,5 +1,14 @@
 // 与导出的缩进树分图规则一致：整支搬运，未知语法保留原图。
 export function splitMindmap(source, limit = 14) {
+  // 与后端一致：只修显式根和同级叶子的错误缩进，不猜分组。
+  const repair = source.split(/\r?\n/)
+  const ids = repair.map((line,i)=>i>0 && line.trim()?i:null).filter(i=>i!==null)
+  const pad = line => line.length-line.trimStart().length
+  if (repair[0]?.trim()==='mindmap' && ids.length>1 && /^\s*root\(\(.+\)\)\s*$/.test(repair[ids[0]]) && ids.slice(1).every(i=>pad(repair[i])===pad(repair[ids[0]]) && !/\t|::|[\[\]{}()]|^\s*%%/.test(repair[i]))) {
+    repair[ids[0]]=repair[ids[0]].trim()
+    ids.slice(1).forEach(i=>{repair[i]='  '+repair[i].trim()})
+    source=repair.join('\n')
+  }
   const lines = source.trim().split(/\r?\n/)
   if (lines[0]?.trim() !== 'mindmap') return [source]
   const nodes = lines.slice(1).filter(line => line.trim())

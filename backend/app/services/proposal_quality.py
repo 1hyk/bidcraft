@@ -85,10 +85,28 @@ def check(project_id):
     issues=[]; refs=defaultdict(list); missing_facts=0; missing_images=0; rows=list(chapters(project_id))
     from app.services.generated_images import catalog as generated_catalog
     generated_by_id={a['asset_id']:a for a in generated_catalog(project_id)}
+    from app.services.compilation_requirements import load_requirements
+    from app.services.contact_review import required_personnel_items
+    personnel_rows=[r for r in rows if re.search(r'团队|人员|组织|负责人',r['title'])]
+    for req,quote in required_personnel_items(load_requirements(project_id)):
+        # 要求明确，但岗位表本身不能证明实名材料已齐；此处提示人工核对，不武断判缺失。
+        target=next((r for r in personnel_rows if '售后' in str(req.get('content') or '') and '售后' in r['title']),None)
+        target=target or next(iter(personnel_rows),None)
+        issues.append({'kind':'person_role_review','node_id':target['id'] if target else None,
+                       'chapter':target['title'] if target else '人员资料要求',
+                       'message':'人员资料要求待核对：'+quote+'。请核对本次投入及真实附件；岗位安排不能代替，已提供资料时可人工确认通过',
+                       'excerpt':(target['body'][:160] if target else ''),'context':quote,
+                       'requirement_id':req.get('id')})
     for row in rows:
         text=re.sub(r'```.*?```','',row['body'],flags=re.S)
         def add(kind,message,excerpt=''):
             issues.append({'node_id':row['id'],'chapter':row['title'],'kind':kind,'message':message,'excerpt':excerpt[:250]})
+        from app.services.diagram_diagnostics import failures, sources as diagram_sources
+        codes=diagram_sources(row['payload'])
+        for failure in failures(project_id,row['id'],row['payload']):
+            pos=failure['position']
+            excerpt=codes[pos-1].strip()[:250] if pos<=len(codes) else ''
+            add('image_failure',f'本章第{pos}张 Mermaid 图在最近导出中渲染失败，请修改源码或单图重新生成后再次导出；不是缺少真实材料',excerpt)
         if row['payload'].get('format') == 'html':
             from lxml import html as html_parser
             try:

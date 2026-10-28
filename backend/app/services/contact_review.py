@@ -7,6 +7,18 @@ NAME = re.compile(r'(?:联系人|负责人|项目经理|工程师|姓名|技术�
 HONORIFIC = re.compile(r'['+SURNAME+r'](?:[\u4e00-\u9fff])?(?:老师|先生|女士)(?![\u4e00-\u9fff])')
 NOT_NAMES = {'待补充','待确认','未填写','项目经理','技术负责人','另行指定','指定人员','采购人','售后服务','技术支持','根据项目'}
 
+def required_personnel_items(requirements):
+    """仅召回明确要求提供我方人员资料的条款，不把组织安排或采购联系人当实名要求。"""
+    for req in requirements:
+        text=str(req.get('title') or '')+' '+str(req.get('content') or '')
+        if not re.search(r'项目经理|技术负责人|售后(?:团队|人员|负责人|联系人)|拟派|拟投入.{0,8}人员|项目团队|服务团队|投入人员',text):continue
+        for sentence in re.split(r'[。；;\n]',text):
+            if re.search(r'无需|无须|不要求|不需要|可不提供|不必',sentence):continue
+            if (re.search(r'须|应|必须|需提供|需提交|提供|提交|填写|列明|列出',sentence)
+                    and re.search(r'姓名|实名|简历|证书|社保|联系电话|手机号码|联系方式',sentence)):
+                yield req,sentence.strip()
+                break
+
 
 def contact_review_excerpts(text, known=()):
     # 一行（含表格行）作为一处，同处姓名电话合并；保留精确片段供定位。

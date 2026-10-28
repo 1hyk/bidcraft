@@ -172,7 +172,12 @@ def export_project_docx(
     # 两件整篇预处理都在遍历前做完（按项目算一次，别在递归里按章重算）：
     # 预热 Mermaid（起一次浏览器就够整篇用）+ 取图名索引。
     index = _project_images(project_id)
-    _warm_mermaid(contents)
+    rendered = _warm_mermaid(contents)
+    from app.services.diagram_diagnostics import save as save_diagram_diagnostics
+    try:
+        save_diagram_diagnostics(project_id, contents, rendered or {})
+    except OSError as exc:
+        print(f'[导出] 图表检查记录写入失败：{type(exc).__name__}')
     try:
         pending = _collect_pending(tree, contents, index)
     except Exception as e:  # noqa: BLE001 清单只是附录，算不出来不该让整篇导不出来
@@ -1202,8 +1207,10 @@ def _warm_mermaid(contents: dict[int, dict]) -> None:
         from app.services.mermaid_source import split_mindmap
 
         sources=[piece for source in sources for piece in split_mindmap(source)]
-        got = len(mermaid_render.render_batch(sources))
+        rendered = mermaid_render.render_batch(sources)
+        got = len(rendered)
         print(f"[导出] Mermaid 图 {got}/{len(set(s.strip() for s in sources))} 张就绪")
+        return rendered
     except Exception as e:  # noqa: BLE001 预热失败无所谓，遍历时会按需渲
         print(f"[导出] Mermaid 预热跳过：{e}")
 

@@ -12,6 +12,7 @@
 + 匹配知识页全文 + 同级章节标题（避免跨节重复，方案 3.10 第 2 条）。
 """
 import json
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -179,7 +180,6 @@ def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
     if role == 'scope_introduction':
         from app.core.page_plan import count_words
         from app.core.chapter_title import normalize
-        import re
         # 模型常复述当前节点标题。这不是新的子章节，先去重再检查职责。
         first = re.match(r'^\s*#{1,6}\s+([^\n]+)\n+', body)
         if first and normalize(first.group(1)) == normalize((ctx.get('node') or {}).get('title', '')):
@@ -200,7 +200,8 @@ def _finish_images(ctx: dict, body: str, project_id: int, node_id: int) -> str:
         name = str(need.get('name') or '').strip() if isinstance(need,dict) else ''
         if name and name not in body and name not in protected and not has_named_table(body,name):
             body += '\n\n[图片占位：'+name+']\n'
-    body = complete_templates(body, protected, table_names=[n.get('name','') for n in ctx['outline'].get('table_needs') or []])
+    body = complete_templates(body, protected, table_names=[n.get('name','') for n in ctx['outline'].get('table_needs') or []],
+                              template_context=bool(re.search(r'(?:报告|记录|签署).*模板',str((ctx.get('node') or {}).get('title') or ''))))
     body = complete_mermaid(body, protected)
     return normalize_body(complete(ctx, body, project_id, node_id) if has_requests(ctx) else body)
 

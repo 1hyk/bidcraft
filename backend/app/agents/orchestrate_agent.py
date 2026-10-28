@@ -46,7 +46,7 @@ OUTLINE_SYSTEM = CONTACT_POLICY + '\n' + """你是资深{G_FULL}编制专家，�
    material（必须取得本项目的真实材料）。illustration 可补充 prompt 描述画面。
    history 仅在内容属于可合成示意时设 allow_generated=true，真实照片、截图、证照、
    检测报告等必须设 false；不得为获取配图而把真实材料改称概念示意。
-   图表应服务于内容，不要为了配图而凑图。
+   图表应服务于内容，不要为了配图而凑图。报告、记录、签署页的空白模板应放入 table_needs，用可编辑表格承载，不拍成纸张照片；本方案设计的对照表不属于 external_evidence，只有真实已有证明才属于外部证据。
    每项补充 content_origin：proposal_design（我方方案安排）或 external_evidence（外部真实材料）；
    data_structure 按实际内容填写：records（记录）、assignment（岗位/班次分配）、comparison（对照）、
    measurements（数据）、timeline（任务时间跨度）、process（流程）、hierarchy（层级）、

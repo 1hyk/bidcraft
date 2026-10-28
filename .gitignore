@@ -76,3 +76,6 @@ vite*.log.err
 
 # 本地后端日志
 /backend/uvicorn.err
+
+# 本机迁移包，包含私密配置与业务数据
+migration_packages/

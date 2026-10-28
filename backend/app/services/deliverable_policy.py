@@ -210,7 +210,9 @@ def sanitize_text(text: str) -> str:
     value = str(text or "")
     if not value:
         return value
-    return _clean(value)
+    # 正文空白清洗不能触及源码：mindmap 的缩进就是父子关系。
+    parts=re.split(r'(```[\s\S]*?```|<pre\b[\s\S]*?</pre>|<[^>]*\bdata-code\s*=\s*(?:"[^"]*"|\'[^\']*\')[^>]*>)',value,flags=re.I)
+    return ''.join(part if (part.startswith('```') or re.match(r'<(?:pre\b|[^>]*\bdata-code\s*=)',part,re.I)) else _clean(part) for part in parts)
 
 
 # 这些键参与目录匹配或与数据库标题对齐，改了会让思路挂错节点，保持原样。

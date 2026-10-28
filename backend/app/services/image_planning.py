@@ -77,6 +77,20 @@ def normalize_outline(outline: dict, assets=()) -> dict:
             continue
         need = dict(raw)
         need['name'] = str(need['name']).strip()
+        # 空白表单的签署区域不是已签署证明，优先由可编辑表格承载。
+        form_design=(need.get('content_origin')=='proposal_design'
+                     and re.search(r'模板|空白表单|签署页.*(?:样例|版式|格式|示意)',need['name'])
+                     and not re.search(r'扫描|原件|已签|真实|客户提供|采购人提供',need['name']+' '+str(need.get('purpose') or '')))
+        if form_design:
+            tables.append({'name':need['name'],'purpose':need.get('purpose') or '', 'blank_template':True})
+            continue
+        # 已识别为记录/对照结构，且没有真实凭证措辞时，不因模型误填来源而变成实证材料。
+        if (need.get('data_structure') in {'records','assignment','comparison','measurements'}
+                and (TABLE.search(need['name']) or legacy_tabular(need))
+                and not re.search(r'截图|扫描|原件|证照|证书|实测|签字|盖章|客户提供|采购人提供|真实材料|现有材料',need['name']+' '+str(need.get('purpose') or ''))
+                and need.get('representation') not in {'material','illustration'}):
+            tables.append({'name':need['name'],'purpose':need.get('purpose') or '', 'data_structure':need['data_structure']})
+            continue
         # 必须真实提供的材料，不可被名称中的“流程/表”等词降级成合成材料。
         real_table = re.search(r'截图|扫描|原件|证照|证书|实测|签字|盖章|客户提供|采购人提供|真实材料|现有材料', need['name']+' '+str(need.get('purpose') or ''))
         explicit = need.get('representation')
